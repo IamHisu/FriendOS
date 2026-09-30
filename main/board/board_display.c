@@ -1,7 +1,8 @@
 #include "board_display.h"
+#include "board_config.h"
 
-#include <stdint.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -12,99 +13,158 @@
 #include "esp_lcd_panel_vendor.h"
 #include "esp_log.h"
 
-#define LCD_HOST       SPI2_HOST
+#include "lvgl.h"
 
-#define LCD_MOSI       41
-#define LCD_SCLK       42
-#define LCD_CS         21
-#define LCD_DC         40
-#define LCD_RST        45
-#define LCD_BL         20
+#include "esp_timer.h"
 
-#define LCD_WIDTH      240
-#define LCD_HEIGHT     240
+
+// ============================================================
+// Configuration
+// ============================================================
+
+#define LVGL_BUFFER_LINES 40
+
+
+// ============================================================
+// Module state
+// ============================================================
 
 static const char *TAG = "board_display";
 
 static esp_lcd_panel_handle_t s_panel = NULL;
+static lv_display_t *s_lvgl_display = NULL;
 
-static void fill_rect(int x1, int y1, int x2, int y2, uint16_t color)
+static uint8_t *s_lvgl_buf1 = NULL;
+static uint8_t *s_lvgl_buf2 = NULL;
+
+
+// ============================================================
+// ESP LCD -> LVGL
+// ============================================================
+
+/**
+ * Called by ESP LCD when the queued color transfer has
+ * actually finished.
+ *
+ * Only now is LVGL allowed to reuse the render buffer.
+ */
+static bool lcd_color_trans_done_cb(
+    esp_lcd_panel_io_handle_t panel_io,
+    esp_lcd_panel_io_event_data_t *edata,
+    void *user_ctx)
 {
-    int width = x2 - x1;
-    int height = y2 - y1;
+    lv_display_t *display = (lv_display_t *)user_ctx;
 
-    if (width <= 0 || height <= 0) {
-        return;
+    if (display != NULL) {
+        lv_display_flush_ready(display);
     }
 
-    size_t pixel_count = width * height;
-    uint8_t *buffer = malloc(pixel_count * 2);
+    return false;
+}
 
-    if (buffer == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate draw buffer");
-        return;
-    }
 
-    // Confirmed working on this board:
-    // RGB565 high byte first, low byte second.
-    uint8_t high = color >> 8;
-    uint8_t low = color & 0xFF;
+// ============================================================
+// LVGL -> ESP LCD
+// ============================================================
 
-    for (size_t i = 0; i < pixel_count; i++) {
-        buffer[i * 2] = high;
-        buffer[i * 2 + 1] = low;
-    }
+static uint32_t lvgl_tick_get_cb(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000);
+}
 
-    ESP_ERROR_CHECK(
-        esp_lcd_panel_draw_bitmap(
-            s_panel,
-            x1,
-            y1,
-            x2,
-            y2,
-            buffer
-        )
+static void lvgl_flush_cb(
+    lv_display_t *display,
+    const lv_area_t *area,
+    uint8_t *px_map)
+{
+    esp_lcd_panel_handle_t panel =
+        (esp_lcd_panel_handle_t)
+        lv_display_get_user_data(display);
+
+    uint32_t pixel_count =
+        (area->x2 - area->x1 + 1) *
+        (area->y2 - area->y1 + 1);
+
+    /*
+     * Verified on this Zhengchen ST7789:
+     *
+     * LVGL RGB565 byte order needs to be swapped before
+     * sending to the LCD.
+     */
+    lv_draw_sw_rgb565_swap(
+        px_map,
+        pixel_count
     );
 
-    free(buffer);
+    /*
+     * esp_lcd_panel_draw_bitmap() queues the color transfer.
+     *
+     * DO NOT call lv_display_flush_ready() here.
+     *
+     * lcd_color_trans_done_cb() will notify LVGL when
+     * DMA transmission is actually complete.
+     */
+    ESP_ERROR_CHECK(
+        esp_lcd_panel_draw_bitmap(
+            panel,
+            area->x1,
+            area->y1,
+            area->x2 + 1,
+            area->y2 + 1,
+            px_map
+        )
+    );
 }
 
-static void draw_test_face(void)
-{
-    const uint16_t bg = 0xFFFF;
-    const uint16_t black = 0x0000;
 
-    fill_rect(0, 0, 240, 240, bg);
-
-    fill_rect(65, 80, 85, 105, black);
-    fill_rect(155, 80, 175, 105, black);
-
-    fill_rect(85, 150, 95, 160, black);
-    fill_rect(95, 160, 145, 170, black);
-    fill_rect(145, 150, 155, 160, black);
-}
+// ============================================================
+// Public API
+// ============================================================
 
 esp_err_t board_display_init(void)
 {
-    ESP_LOGI(TAG, "Initializing Zhengchen display");
+    ESP_LOGI(
+        TAG,
+        "Initializing Zhengchen display"
+    );
+
+
+    // --------------------------------------------------------
+    // Backlight
+    // --------------------------------------------------------
 
     gpio_config_t bl_config = {
         .pin_bit_mask = 1ULL << LCD_BL,
         .mode = GPIO_MODE_OUTPUT,
     };
 
-    ESP_ERROR_CHECK(gpio_config(&bl_config));
+    ESP_ERROR_CHECK(
+        gpio_config(&bl_config)
+    );
 
     // Keep backlight off during initialization.
-    gpio_set_level(LCD_BL, 0);
+    gpio_set_level(
+        LCD_BL,
+        0
+    );
+
+
+    // --------------------------------------------------------
+    // SPI bus
+    // --------------------------------------------------------
 
     spi_bus_config_t bus_config = {
         .sclk_io_num = LCD_SCLK,
         .mosi_io_num = LCD_MOSI,
         .miso_io_num = -1,
+
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = LCD_WIDTH * LCD_HEIGHT * sizeof(uint16_t),
+
+        .max_transfer_sz =
+            LCD_WIDTH *
+            LCD_HEIGHT *
+            sizeof(uint16_t),
     };
 
     ESP_ERROR_CHECK(
@@ -115,15 +175,31 @@ esp_err_t board_display_init(void)
         )
     );
 
+
+    // --------------------------------------------------------
+    // LCD SPI IO
+    // --------------------------------------------------------
+
     esp_lcd_panel_io_handle_t io_handle = NULL;
 
+    /*
+     * At this point LVGL display does not exist yet,
+     * so user_ctx is initially NULL.
+     *
+     * We register the callback after creating the
+     * LVGL display below.
+     */
     esp_lcd_panel_io_spi_config_t io_config = {
         .dc_gpio_num = LCD_DC,
         .cs_gpio_num = LCD_CS,
+
         .pclk_hz = 20 * 1000 * 1000,
+
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
+
         .spi_mode = 0,
+
         .trans_queue_depth = 10,
     };
 
@@ -135,9 +211,17 @@ esp_err_t board_display_init(void)
         )
     );
 
+
+    // --------------------------------------------------------
+    // ST7789
+    // --------------------------------------------------------
+
     esp_lcd_panel_dev_config_t panel_config = {
         .reset_gpio_num = LCD_RST,
-        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+
+        .rgb_ele_order =
+            LCD_RGB_ELEMENT_ORDER_RGB,
+
         .bits_per_pixel = 16,
     };
 
@@ -149,20 +233,151 @@ esp_err_t board_display_init(void)
         )
     );
 
-    ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
-    ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
+    ESP_ERROR_CHECK(
+        esp_lcd_panel_reset(s_panel)
+    );
 
-    // Required by this specific panel.
-    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true));
+    ESP_ERROR_CHECK(
+        esp_lcd_panel_init(s_panel)
+    );
 
-    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
+    /*
+     * Required by this specific Zhengchen panel.
+     *
+     * Verified during hardware bring-up.
+     */
+    ESP_ERROR_CHECK(
+        esp_lcd_panel_invert_color(
+            s_panel,
+            true
+        )
+    );
 
-    gpio_set_level(LCD_BL, 1);
+    ESP_ERROR_CHECK(
+        esp_lcd_panel_disp_on_off(
+            s_panel,
+            true
+        )
+    );
 
-    ESP_LOGI(TAG, "Display initialized");
 
-    // Temporary hardware regression test.
-    draw_test_face();
+    // --------------------------------------------------------
+    // Backlight ON
+    // --------------------------------------------------------
+
+    gpio_set_level(
+        LCD_BL,
+        1
+    );
+
+    ESP_LOGI(
+        TAG,
+        "ST7789 initialized"
+    );
+
+
+    // --------------------------------------------------------
+    // LVGL
+    // --------------------------------------------------------
+
+    lv_init();
+
+    /*
+     * Use ESP Timer as LVGL's millisecond time source.
+     */
+    lv_tick_set_cb(lvgl_tick_get_cb);
+    
+    s_lvgl_display =
+        lv_display_create(
+            LCD_WIDTH,
+            LCD_HEIGHT
+        );
+
+    if (s_lvgl_display == NULL) {
+        ESP_LOGE(
+            TAG,
+            "Failed to create LVGL display"
+        );
+
+        return ESP_FAIL;
+    }
+
+
+    // --------------------------------------------------------
+    // Link LVGL <-> ESP LCD
+    // --------------------------------------------------------
+
+    lv_display_set_user_data(
+        s_lvgl_display,
+        s_panel
+    );
+
+    lv_display_set_flush_cb(
+        s_lvgl_display,
+        lvgl_flush_cb
+    );
+
+
+    /*
+     * Register ESP LCD DMA completion callback.
+     *
+     * s_lvgl_display is passed back to us as user_ctx.
+     */
+    esp_lcd_panel_io_callbacks_t io_callbacks = {
+        .on_color_trans_done =
+            lcd_color_trans_done_cb,
+    };
+
+    ESP_ERROR_CHECK(
+        esp_lcd_panel_io_register_event_callbacks(
+            io_handle,
+            &io_callbacks,
+            s_lvgl_display
+        )
+    );
+
+
+    // --------------------------------------------------------
+    // LVGL render buffers
+    // --------------------------------------------------------
+
+    size_t buffer_size =
+        LCD_WIDTH *
+        LVGL_BUFFER_LINES *
+        sizeof(uint16_t);
+
+    s_lvgl_buf1 =
+        malloc(buffer_size);
+
+    s_lvgl_buf2 =
+        malloc(buffer_size);
+
+    if (s_lvgl_buf1 == NULL ||
+        s_lvgl_buf2 == NULL) {
+
+        ESP_LOGE(
+            TAG,
+            "Failed to allocate LVGL buffers"
+        );
+
+        return ESP_ERR_NO_MEM;
+    }
+
+    lv_display_set_buffers(
+        s_lvgl_display,
+        s_lvgl_buf1,
+        s_lvgl_buf2,
+        buffer_size,
+        LV_DISPLAY_RENDER_MODE_PARTIAL
+    );
+
+
+    ESP_LOGI(
+        TAG,
+        "LVGL display initialized (%dx%d)",
+        LCD_WIDTH,
+        LCD_HEIGHT
+    );
 
     return ESP_OK;
 }
