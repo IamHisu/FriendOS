@@ -1,0 +1,24 @@
+# ESP-IDF build output
+build/
+managed_components/
+
+# ESP-IDF generated backup
+sdkconfig.old
+
+# IDE / Editor local settings
+.vscode/
+.clangd
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+
+# Secrets
+.env
+.env.*
+secrets.h
+credentials.h
