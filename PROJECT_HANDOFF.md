@@ -1,7 +1,8 @@
 # FriendOS --- Project Handoff & Development Guide
 
 > Last updated: 2026-09-30\
-> Status: Hardware bring-up --- LCD validated\
+> Status: Display + LVGL + Mộc Face UI validated; next: Buttons
+> bring-up\
 > Platform: ESP32-S3 / ESP-IDF 5.5.5
 
 ------------------------------------------------------------------------
@@ -544,6 +545,25 @@ Một khuôn mặt đơn giản đã hiển thị thành công trên board thậ
 
 Không thay orientation/offset nếu không có lý do cụ thể.
 
+### LVGL integration --- validated
+
+LVGL 9 đã được tích hợp và chạy trên ST7789 240×240.
+
+Known-good design:
+
+-   partial rendering;
+-   two render buffers;
+-   buffer height: 40 lines;
+-   ESP Timer dùng làm LVGL millisecond tick source;
+-   `lv_timer_handler()` được service định kỳ;
+-   RGB565 buffer cần `lv_draw_sw_rgb565_swap(...)` trước khi gửi LCD;
+-   `esp_lcd_panel_draw_bitmap(...)` queue DMA transfer;
+-   không gọi `lv_display_flush_ready()` ngay trong flush callback;
+-   chỉ gọi `lv_display_flush_ready()` từ ESP-LCD `on_color_trans_done`
+    callback sau khi transfer thực sự hoàn tất.
+
+Điều này tránh việc LVGL tái sử dụng render buffer khi DMA vẫn đang đọc.
+
 ------------------------------------------------------------------------
 
 ## 13. Peripheral Pinout Awaiting Validation
@@ -598,8 +618,16 @@ Backlight                PASS
 RGB565                   PASS
 Color inversion          PASS
 Orientation              PASS
+LVGL 9                   PASS
+LVGL partial buffer      PASS
+LVGL double buffer       PASS
+LVGL RGB565 byte swap    PASS
+ESP-LCD DMA callback     PASS
+ESP Timer / LVGL tick    PASS
+Mộc Face UI              PASS
+Natural blink            PASS
+Emotion UI               PASS
 
-LVGL                     NOT STARTED
 Buttons                  NOT TESTED
 Microphone               NOT TESTED
 Speaker                  NOT TESTED
@@ -617,6 +645,28 @@ FriendLink               NOT STARTED
 
 `main/main.c` hiện là bring-up/test code. Không tiếp tục để toàn bộ
 FriendOS lớn dần trong `main.c`.
+
+Current working structure:
+
+``` text
+main/
+├── CMakeLists.txt
+├── main.c
+├── board/
+│   ├── board_config.h
+│   ├── board_display.h
+│   └── board_display.c
+└── ui/
+    ├── friend_ui.h
+    └── friend_ui.c
+```
+
+Current responsibility split:
+
+-   `board_config.h`: board-specific pins/config.
+-   `board_display.c`: SPI/ST7789/backlight/LVGL display bridge.
+-   `friend_ui.c`: Mộc face/emotion/blink UI.
+-   `main.c`: orchestration and temporary bring-up tests.
 
 Recommended direction:
 
@@ -670,83 +720,72 @@ board definition.
 
 ------------------------------------------------------------------------
 
-## 16. Immediate Next Task --- LVGL
+## 16. Immediate Next Task --- Buttons
 
-**CURRENT STOPPING POINT: LCD hardware bring-up completed.**
+**CURRENT STOPPING POINT: Display, LVGL và Mộc Face UI đã hoạt động ổn
+định.**
 
-**NEXT TASK: Integrate LVGL minimally.**
+**NEXT TASK: Validate 3 physical buttons.**
 
 Chưa tích hợp AI.
 
-Milestone đầu tiên:
+Các pin cần kiểm tra thực nghiệm:
 
-``` text
-LVGL
- ↓
-existing known-good ST7789 driver
- ↓
-240×240 display
+``` c
+#define BTN_BOOT     0
+#define BTN_VOL_UP   10
+#define BTN_VOL_DOWN 39
 ```
 
-Chỉ render solid background hoặc một basic LVGL object.
+Milestone:
 
-Cần validate:
+1.  Khởi tạo GPIO input.
+2.  Xác định active HIGH/LOW.
+3.  Xác định pull-up/pull-down phù hợp.
+4.  Nhấn từng nút và xác nhận log trên Serial Monitor.
+5.  Kiểm tra debounce.
+6.  Chỉ sau khi PASS mới gán chức năng volume / wake / push-to-talk.
 
--   LVGL initialization;
--   display buffer;
--   flush callback;
--   RGB565 color order;
--   inversion;
--   refresh stability;
--   PSRAM/internal RAM usage.
-
-Sau khi LVGL ổn định mới xây UI Mộc.
+Không nối button trực tiếp vào logic AI ở bước bring-up này.
 
 ------------------------------------------------------------------------
 
-## 17. Mộc Face UI
+## 17. Mộc Face UI --- Current Validated State
 
-Tạo reusable `MocFace`.
+Mộc Face UI đã được tích hợp bằng LVGL và chạy ổn định trên màn 240×240.
 
-MocFace không được biết về OpenAI.
-
-API concept:
+UI vẫn độc lập với OpenAI/Xiaozhi. Application gọi API abstraction:
 
 ``` c
-friend_emotion_set(FRIEND_EMOTION_HAPPY);
+friend_ui_set_emotion(FRIEND_EMOTION_HAPPY);
 ```
 
-Emotion Manager cập nhật MocFace.
-
-Initial expressions:
+Các biểu cảm đã được thử nghiệm trong quá trình phát triển gồm:
 
 ``` text
 NEUTRAL
 HAPPY
-THINKING
-LISTENING
-SPEAKING
 SLEEPY
 ```
 
-Later:
+Đã thử các phiên bản UI mở rộng hơn với nhiều emotion/action, nhưng
+phiên bản emoji cũ được chọn giữ lại vì hình ảnh ổn định và phù hợp hơn.
+Không tiếp tục mở rộng animation trước khi các hardware layer tiếp theo
+được bring-up.
 
-``` text
-SAD
-EXCITED
-SURPRISED
-CONFUSED
-LOVE
-```
+Đã xác nhận:
 
-Animation có thể gồm:
+-   khuôn mặt render đúng;
+-   natural blink hoạt động;
+-   blink không gây lag/tearing thấy rõ;
+-   emotion switching hoạt động;
+-   UI dùng LVGL partial double buffer;
+-   RGB565 cần byte swap trước khi gửi LCD;
+-   `lv_display_flush_ready()` chỉ được gọi sau ESP-LCD DMA completion
+    callback.
 
--   blinking;
--   eye movement;
--   breathing/idle;
--   mouth movement while speaking;
--   listening animation;
--   thinking animation.
+Các emotion/action nâng cao có thể bổ sung sau khi audio + AI pipeline
+hoạt động.
 
 ------------------------------------------------------------------------
 
@@ -1018,29 +1057,31 @@ RST  45
 BL   20
 ```
 
-LCD color + geometry tests đã PASS trên phần cứng thật. Một khuôn mặt
-đơn giản đã hiển thị thành công.
+LCD color + geometry tests đã PASS trên phần cứng thật.
 
-**Do not redo basic hardware discovery unless hardware/configuration
-changes.**
+LVGL 9 integration cũng đã PASS. Mộc Face UI đã chạy ổn định với natural
+blink và emotion switching. Display bridge hiện dùng partial double
+buffer, RGB565 byte swap và ESP-LCD DMA completion callback trước khi
+báo `lv_display_flush_ready()`.
+
+**Do not redo basic hardware/LCD/LVGL discovery unless hardware or
+configuration changes.**
 
 ## NEXT TASK
 
-**Integrate LVGL minimally with the existing known-good ST7789
-configuration.**
+**Validate physical buttons: GPIO0, GPIO10, GPIO39.**
 
-Sau khi LVGL pass:
+Thứ tự tiếp theo:
 
-1.  MocFace
-2.  Emotion Manager
-3.  Buttons
-4.  Microphone
-5.  Speaker
-6.  Battery
-7.  Wi-Fi/audio pipeline
-8.  AI
-9.  FriendLink
-10. Multi-board demo
+1.  Buttons
+2.  Microphone
+3.  Speaker
+4.  Battery
+5.  Wi-Fi
+6.  Basic audio pipeline
+7.  AI
+8.  FriendLink
+9.  Multi-board demo
 
 **Do not jump directly to OpenAI/FriendLink before the underlying
 hardware layers are validated.**
