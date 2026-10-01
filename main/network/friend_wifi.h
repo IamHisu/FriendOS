@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -25,10 +26,12 @@ esp_err_t friend_wifi_manager_start(void);
 
 friend_wifi_state_t friend_wifi_get_state(void);
 bool friend_wifi_is_online(void);
+bool friend_wifi_is_connected_to(const char *ssid);
+esp_err_t friend_wifi_get_sta_ip(char *address, size_t size);
 
 void friend_wifi_request_manual_mode(void);
+esp_err_t friend_wifi_finish_manual_mode(void);
 
-esp_err_t friend_wifi_scan(void);
 esp_err_t friend_wifi_get_scan_results(wifi_ap_record_t *records, uint16_t *count);
 esp_err_t friend_wifi_connect(const char *ssid, const char *password, uint32_t timeout_ms);
 esp_err_t friend_wifi_start_config_ap(void);

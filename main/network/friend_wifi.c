@@ -1,6 +1,7 @@
 #include "friend_wifi.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -20,6 +21,7 @@
 #define WIFI_CONNECTED_BIT       BIT0
 #define WIFI_DISCONNECTED_BIT    BIT1
 #define WIFI_MANUAL_REQUEST_BIT  BIT2
+#define WIFI_MANUAL_FINISH_BIT   BIT3
 
 
 #define WIFI_MANAGER_STACK_SIZE  6144
@@ -34,11 +36,15 @@ static EventGroupHandle_t wifi_event_group = NULL;
 static TaskHandle_t wifi_manager_task_handle = NULL;
 
 static volatile friend_wifi_state_t wifi_state = FRIEND_WIFI_STATE_IDLE;
+static volatile bool sta_has_ip = false;
+static esp_netif_t *sta_netif = NULL;
+static char failed_ssid[FRIEND_WIFI_SSID_MAX_LEN + 1] = {0};
+static TickType_t failed_at = 0;
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data);
 static void wifi_manager_task(void *arg);
 static esp_err_t wifi_manager_scan_and_connect(void);
-static esp_err_t wifi_manager_find_best_saved_network(char *ssid, size_t ssid_size, char *password, size_t password_size, int8_t *rssi);
+static esp_err_t wifi_manager_find_best_saved_network(char *ssid, size_t ssid_size, char *password, size_t password_size, int8_t *rssi, const char *skip_ssid);
 static esp_err_t wifi_connect_internal(const char *ssid, const char *password);
 static esp_err_t wifi_enter_manual_mode(void);
 static void wifi_set_state(friend_wifi_state_t state);
@@ -62,7 +68,7 @@ esp_err_t friend_wifi_init(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    esp_netif_create_default_wifi_sta();
+    sta_netif = esp_netif_create_default_wifi_sta();
     esp_netif_create_default_wifi_ap();
 
     wifi_init_config_t wifi_config = WIFI_INIT_CONFIG_DEFAULT();
@@ -127,12 +133,35 @@ friend_wifi_state_t friend_wifi_get_state(void)
 
 bool friend_wifi_is_online(void)
 {
-    return wifi_state == FRIEND_WIFI_STATE_ONLINE;
+    return sta_has_ip;
+}
+
+esp_err_t friend_wifi_get_sta_ip(char *address, size_t size)
+{
+    if (address == NULL || size < 16 || !sta_has_ip || sta_netif == NULL) return ESP_ERR_INVALID_STATE;
+
+    esp_netif_ip_info_t info;
+    esp_err_t ret = esp_netif_get_ip_info(sta_netif, &info);
+    if (ret != ESP_OK) return ret;
+
+    snprintf(address, size, IPSTR, IP2STR(&info.ip));
+    return ESP_OK;
+}
+
+bool friend_wifi_is_connected_to(const char *ssid)
+{
+    if (ssid == NULL || !sta_has_ip)
+    {
+        return false;
+    }
+
+    wifi_ap_record_t ap_info = {0};
+    return esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK && strcmp((const char *)ap_info.ssid, ssid) == 0;
 }
 
 void friend_wifi_request_manual_mode(void)
 {
-    if (wifi_event_group == NULL)
+    if (wifi_event_group == NULL || wifi_state == FRIEND_WIFI_STATE_MANUAL)
     {
         return;
     }
@@ -142,37 +171,15 @@ void friend_wifi_request_manual_mode(void)
     xEventGroupSetBits(wifi_event_group, WIFI_MANUAL_REQUEST_BIT);
 }
 
-esp_err_t friend_wifi_scan(void)
+esp_err_t friend_wifi_finish_manual_mode(void)
 {
-    ESP_LOGI(TAG, "Scanning Wi-Fi networks");
-
-    wifi_scan_config_t scan_config = {
-        .ssid = NULL,
-        .bssid = NULL,
-        .channel = 0,
-        .show_hidden = false,
-        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-    };
-
-    esp_err_t ret = esp_wifi_scan_start(&scan_config, true);
-
-    if (ret != ESP_OK)
+    if (wifi_state != FRIEND_WIFI_STATE_MANUAL)
     {
-        ESP_LOGE(TAG, "Wi-Fi scan failed: %s", esp_err_to_name(ret));
-        return ret;
+        return ESP_ERR_INVALID_STATE;
     }
 
-    uint16_t ap_count = 0;
-
-    ret = esp_wifi_scan_get_ap_num(&ap_count);
-
-    if (ret != ESP_OK)
-    {
-        return ret;
-    }
-
-    ESP_LOGI(TAG, "Found %u Wi-Fi networks", ap_count);
-
+    failed_ssid[0] = '\0';
+    xEventGroupSetBits(wifi_event_group, WIFI_MANUAL_FINISH_BIT);
     return ESP_OK;
 }
 
@@ -206,9 +213,11 @@ esp_err_t friend_wifi_get_scan_results(wifi_ap_record_t *records, uint16_t *coun
     if (ret != ESP_OK)
     {
         ESP_LOGE(TAG, "Failed to get scan results: %s", esp_err_to_name(ret));
+        esp_wifi_clear_ap_list();
         return ret;
     }
 
+    esp_wifi_clear_ap_list();
     ESP_LOGI(TAG, "Config scan found %u networks", *count);
 
     return ESP_OK;
@@ -224,6 +233,22 @@ esp_err_t friend_wifi_connect(const char *ssid, const char *password, uint32_t t
     if (strlen(ssid) == 0 || strlen(ssid) > 32 || strlen(password) > 64)
     {
         return ESP_ERR_INVALID_ARG;
+    }
+
+    if (sta_has_ip)
+    {
+        xEventGroupClearBits(wifi_event_group, WIFI_DISCONNECTED_BIT);
+        esp_err_t disconnect_ret = esp_wifi_disconnect();
+        if (disconnect_ret != ESP_OK)
+        {
+            return disconnect_ret;
+        }
+
+        EventBits_t disconnect_bits = xEventGroupWaitBits(wifi_event_group, WIFI_DISCONNECTED_BIT, pdTRUE, pdFALSE, pdMS_TO_TICKS(3000));
+        if (!(disconnect_bits & WIFI_DISCONNECTED_BIT))
+        {
+            return ESP_ERR_TIMEOUT;
+        }
     }
 
     xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT | WIFI_DISCONNECTED_BIT);
@@ -253,6 +278,8 @@ esp_err_t friend_wifi_connect(const char *ssid, const char *password, uint32_t t
         return ESP_FAIL;
     }
 
+    esp_wifi_disconnect();
+    xEventGroupWaitBits(wifi_event_group, WIFI_DISCONNECTED_BIT, pdTRUE, pdFALSE, pdMS_TO_TICKS(3000));
     return ESP_ERR_TIMEOUT;
 }
 
@@ -301,7 +328,21 @@ static void wifi_manager_task(void *arg)
     {
         if (wifi_state == FRIEND_WIFI_STATE_MANUAL)
         {
-            vTaskDelay(pdMS_TO_TICKS(500));
+            EventBits_t bits = xEventGroupWaitBits(wifi_event_group, WIFI_MANUAL_FINISH_BIT, pdTRUE, pdFALSE, portMAX_DELAY);
+            if (bits & WIFI_MANUAL_FINISH_BIT)
+            {
+                vTaskDelay(pdMS_TO_TICKS(500));
+                esp_err_t ret = esp_wifi_set_mode(WIFI_MODE_STA);
+
+                if (ret == ESP_OK)
+                {
+                    wifi_set_state(sta_has_ip ? FRIEND_WIFI_STATE_ONLINE : FRIEND_WIFI_STATE_OFFLINE);
+                }
+                else
+                {
+                    ESP_LOGE(TAG, "Failed to leave manual setup: %s", esp_err_to_name(ret));
+                }
+            }
             continue;
         }
 
@@ -380,7 +421,9 @@ static esp_err_t wifi_manager_scan_and_connect(void)
 
     ESP_LOGI(TAG, "Looking for saved Wi-Fi networks");
 
-    esp_err_t ret = wifi_manager_find_best_saved_network(ssid, sizeof(ssid), password, sizeof(password), &rssi);
+    const char *skip_ssid = failed_ssid[0] != '\0' &&
+        (xTaskGetTickCount() - failed_at) < pdMS_TO_TICKS(30000) ? failed_ssid : NULL;
+    esp_err_t ret = wifi_manager_find_best_saved_network(ssid, sizeof(ssid), password, sizeof(password), &rssi, skip_ssid);
 
     if (ret == ESP_ERR_NOT_FOUND)
     {
@@ -407,6 +450,8 @@ static esp_err_t wifi_manager_scan_and_connect(void)
     if (ret != ESP_OK)
     {
         ESP_LOGW(TAG, "Failed to start connection: %s", esp_err_to_name(ret));
+        memcpy(failed_ssid, ssid, strlen(ssid) + 1);
+        failed_at = xTaskGetTickCount();
         return ret;
     }
 
@@ -429,7 +474,11 @@ static esp_err_t wifi_manager_scan_and_connect(void)
 
     if (bits & WIFI_CONNECTED_BIT)
     {
+        failed_ssid[0] = '\0';
         wifi_set_state(FRIEND_WIFI_STATE_ONLINE);
+
+        esp_err_t http_ret = friend_http_start();
+        if (http_ret != ESP_OK) ESP_LOGE(TAG, "Home HTTP unavailable: %s", esp_err_to_name(http_ret));
 
         ESP_LOGI(TAG, "Wi-Fi online: %s", ssid);
 
@@ -439,17 +488,21 @@ static esp_err_t wifi_manager_scan_and_connect(void)
     if (bits & WIFI_DISCONNECTED_BIT)
     {
         ESP_LOGW(TAG, "Connection failed: %s", ssid);
+        memcpy(failed_ssid, ssid, strlen(ssid) + 1);
+        failed_at = xTaskGetTickCount();
         return ESP_FAIL;
     }
 
     ESP_LOGW(TAG, "Connection timeout: %s", ssid);
 
     esp_wifi_disconnect();
+    memcpy(failed_ssid, ssid, strlen(ssid) + 1);
+    failed_at = xTaskGetTickCount();
 
     return ESP_ERR_TIMEOUT;
 }
 
-static esp_err_t wifi_manager_find_best_saved_network(char *ssid, size_t ssid_size, char *password, size_t password_size, int8_t *rssi)
+static esp_err_t wifi_manager_find_best_saved_network(char *ssid, size_t ssid_size, char *password, size_t password_size, int8_t *rssi, const char *skip_ssid)
 {
     if (ssid == NULL || password == NULL || rssi == NULL)
     {
@@ -484,11 +537,13 @@ static esp_err_t wifi_manager_find_best_saved_network(char *ssid, size_t ssid_si
 
     if (ret != ESP_OK)
     {
+        esp_wifi_clear_ap_list();
         return ret;
     }
 
     if (ap_count == 0)
     {
+        esp_wifi_clear_ap_list();
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -496,6 +551,7 @@ static esp_err_t wifi_manager_find_best_saved_network(char *ssid, size_t ssid_si
 
     if (records == NULL)
     {
+        esp_wifi_clear_ap_list();
         return ESP_ERR_NO_MEM;
     }
 
@@ -505,9 +561,12 @@ static esp_err_t wifi_manager_find_best_saved_network(char *ssid, size_t ssid_si
 
     if (ret != ESP_OK)
     {
+        esp_wifi_clear_ap_list();
         free(records);
         return ret;
     }
+
+    esp_wifi_clear_ap_list();
 
     bool found = false;
     int8_t best_rssi = -127;
@@ -515,9 +574,15 @@ static esp_err_t wifi_manager_find_best_saved_network(char *ssid, size_t ssid_si
 
     for (uint16_t i = 0; i < record_count; i++)
     {
+        records[i].ssid[sizeof(records[i].ssid) - 1] = '\0';
         const char *candidate_ssid = (const char *)records[i].ssid;
 
         if (candidate_ssid[0] == '\0')
+        {
+            continue;
+        }
+
+        if (skip_ssid != NULL && strcmp(candidate_ssid, skip_ssid) == 0)
         {
             continue;
         }
@@ -559,8 +624,8 @@ static esp_err_t wifi_connect_internal(const char *ssid, const char *password)
 {
     wifi_config_t sta_config = {0};
 
-    strlcpy((char *)sta_config.sta.ssid, ssid, sizeof(sta_config.sta.ssid));
-    strlcpy((char *)sta_config.sta.password, password, sizeof(sta_config.sta.password));
+    memcpy(sta_config.sta.ssid, ssid, strlen(ssid));
+    memcpy(sta_config.sta.password, password, strlen(password));
 
     sta_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
     sta_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
@@ -601,6 +666,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 
         ESP_LOGI(TAG, "STA got IP: " IPSTR, IP2STR(&event->ip_info.ip));
 
+        sta_has_ip = true;
         xEventGroupClearBits(wifi_event_group, WIFI_DISCONNECTED_BIT);
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
 
@@ -613,6 +679,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 
         ESP_LOGW(TAG, "STA disconnected, reason=%u", event->reason);
 
+        sta_has_ip = false;
         xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
         xEventGroupSetBits(wifi_event_group, WIFI_DISCONNECTED_BIT);
     }
@@ -628,12 +695,14 @@ static esp_err_t wifi_enter_manual_mode(void)
     ESP_LOGI(TAG, "Entering manual Wi-Fi setup");
 
     wifi_set_state(FRIEND_WIFI_STATE_MANUAL);
+    xEventGroupClearBits(wifi_event_group, WIFI_MANUAL_FINISH_BIT);
 
     esp_err_t ret = friend_wifi_start_config_ap();
 
     if (ret != ESP_OK)
     {
-        wifi_set_state(FRIEND_WIFI_STATE_OFFLINE);
+        esp_wifi_set_mode(WIFI_MODE_STA);
+        wifi_set_state(sta_has_ip ? FRIEND_WIFI_STATE_ONLINE : FRIEND_WIFI_STATE_OFFLINE);
 
         ESP_LOGE(TAG, "Failed to start manual setup AP");
         return ret;
@@ -643,7 +712,8 @@ static esp_err_t wifi_enter_manual_mode(void)
 
     if (ret != ESP_OK)
     {
-        wifi_set_state(FRIEND_WIFI_STATE_OFFLINE);
+        esp_wifi_set_mode(WIFI_MODE_STA);
+        wifi_set_state(sta_has_ip ? FRIEND_WIFI_STATE_ONLINE : FRIEND_WIFI_STATE_OFFLINE);
 
         ESP_LOGE(TAG, "Failed to start provisioning HTTP server");
         return ret;

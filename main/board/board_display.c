@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -35,6 +36,63 @@ static lv_display_t *s_lvgl_display = NULL;
 
 static uint8_t *s_lvgl_buf1 = NULL;
 static uint8_t *s_lvgl_buf2 = NULL;
+static board_display_perf_t s_perf;
+static int64_t s_render_started_us;
+static int64_t s_previous_render_started_us;
+static int64_t s_flush_wait_started_us;
+
+static void display_perf_event_cb(lv_event_t *event)
+{
+    lv_event_code_t code = lv_event_get_code(event);
+    int64_t now = esp_timer_get_time();
+
+    if (code == LV_EVENT_RENDER_START)
+    {
+        if (s_previous_render_started_us != 0)
+        {
+            uint32_t gap = (uint32_t)(now - s_previous_render_started_us);
+            s_perf.render_gap_count++;
+            s_perf.render_gap_total_us += gap;
+            if (gap > s_perf.render_gap_max_us) s_perf.render_gap_max_us = gap;
+        }
+
+        s_previous_render_started_us = now;
+        s_render_started_us = now;
+    }
+    else if (code == LV_EVENT_RENDER_READY && s_render_started_us != 0)
+    {
+        uint32_t elapsed = (uint32_t)(now - s_render_started_us);
+        s_perf.render_count++;
+        s_perf.render_total_us += elapsed;
+        if (elapsed > s_perf.render_max_us) s_perf.render_max_us = elapsed;
+        s_render_started_us = 0;
+    }
+    else if (code == LV_EVENT_FLUSH_WAIT_START)
+    {
+        s_flush_wait_started_us = now;
+    }
+    else if (code == LV_EVENT_FLUSH_WAIT_FINISH && s_flush_wait_started_us != 0)
+    {
+        uint32_t elapsed = (uint32_t)(now - s_flush_wait_started_us);
+        s_perf.flush_wait_total_us += elapsed;
+        if (elapsed > s_perf.flush_wait_max_us) s_perf.flush_wait_max_us = elapsed;
+        s_flush_wait_started_us = 0;
+    }
+    else if (code == LV_EVENT_FLUSH_START)
+    {
+        const lv_area_t *area = lv_event_get_param(event);
+        s_perf.flush_count++;
+        s_perf.flush_pixels += lv_area_get_width(area) * lv_area_get_height(area);
+    }
+}
+
+void board_display_perf_take(board_display_perf_t *stats)
+{
+    if (stats == NULL) return;
+    *stats = s_perf;
+    memset(&s_perf, 0, sizeof(s_perf));
+    s_previous_render_started_us = 0;
+}
 
 
 // ============================================================
@@ -210,6 +268,7 @@ esp_err_t board_display_init(void)
 
     lv_display_set_user_data(s_lvgl_display, s_panel);
     lv_display_set_flush_cb(s_lvgl_display, lvgl_flush_cb);
+    lv_display_add_event_cb(s_lvgl_display, display_perf_event_cb, LV_EVENT_ALL, NULL);
 
     /*
      * Register ESP LCD DMA completion callback.

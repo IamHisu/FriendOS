@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Mộc Home</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <main class="home">
+        <header>
+            <h1>Mộc Home</h1>
+            <span id="connection">Đang kết nối...</span>
+        </header>
+        <section>
+            <h2>Màn hình TFT</h2>
+            <p id="displayState">Đang đọc trạng thái...</p>
+            <div class="actions">
+                <label class="file-picker" for="imageFile">Chọn ảnh<input id="imageFile" type="file" accept="image/jpeg,image/png,image/gif,.jpg,.jpeg,.png,.gif"></label>
+                <button id="showFace" type="button">Hiện mặt Mộc</button>
+            </div>
+            <img id="preview" class="preview hidden" alt="Ảnh đã chọn">
+            <p id="uploadStatus" role="status"></p>
+            <p class="muted">JPG/PNG tự thu vừa màn 240×240. GIF động giữ nguyên kích thước, tối đa 240×240 và 1 MB. Ảnh sẽ mất khi Mộc khởi động lại.</p>
+        </section>
+    </main>
+    <script src="/home.js"></script>
+</body>
+</html>

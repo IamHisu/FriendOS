@@ -2,12 +2,15 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 
 #include "friend_wifi.h"
 #include "friend_wifi_store.h"
+#include "ui/friend_media.h"
 
 static const char *TAG = "HTTP";
 
@@ -21,12 +24,21 @@ extern const char style_css_end[] asm("_binary_style_css_end");
 
 extern const char app_js_start[] asm("_binary_app_js_start");
 extern const char app_js_end[] asm("_binary_app_js_end");
+extern const char home_html_start[] asm("_binary_home_html_start");
+extern const char home_html_end[] asm("_binary_home_html_end");
+extern const char home_js_start[] asm("_binary_home_js_start");
+extern const char home_js_end[] asm("_binary_home_js_end");
 
 static esp_err_t root_handler(httpd_req_t *req);
 static esp_err_t style_css_handler(httpd_req_t *req);
 static esp_err_t app_js_handler(httpd_req_t *req);
 static esp_err_t wifi_scan_handler(httpd_req_t *req);
 static esp_err_t wifi_connect_handler(httpd_req_t *req);
+static esp_err_t wifi_forget_handler(httpd_req_t *req);
+static esp_err_t home_js_handler(httpd_req_t *req);
+static esp_err_t status_handler(httpd_req_t *req);
+static esp_err_t media_upload_handler(httpd_req_t *req);
+static esp_err_t media_face_handler(httpd_req_t *req);
 
 static int hex_value(char c)
 {
@@ -48,55 +60,249 @@ static int hex_value(char c)
     return -1;
 }
 
-static void url_decode(char *dst, size_t dst_size, const char *src)
+static bool url_decode(char *dst, size_t dst_size, const char *src)
 {
     if (dst == NULL || src == NULL || dst_size == 0)
     {
-        return;
+        return false;
     }
 
     size_t di = 0;
 
-    for (size_t si = 0; src[si] != '\0' && di + 1 < dst_size; si++)
+    for (size_t si = 0; src[si] != '\0'; si++)
     {
+        if (di + 1 >= dst_size)
+        {
+            return false;
+        }
+
         if (src[si] == '+')
         {
             dst[di++] = ' ';
             continue;
         }
 
-        if (src[si] == '%' && src[si + 1] != '\0' && src[si + 2] != '\0')
+        if (src[si] == '%')
         {
+            if (src[si + 1] == '\0' || src[si + 2] == '\0')
+            {
+                return false;
+            }
+
             int high = hex_value(src[si + 1]);
             int low = hex_value(src[si + 2]);
 
-            if (high >= 0 && low >= 0)
+            if (high >= 0 && low >= 0 && (high != 0 || low != 0))
             {
                 dst[di++] = (char)((high << 4) | low);
                 si += 2;
                 continue;
             }
+
+            return false;
         }
 
         dst[di++] = src[si];
     }
 
     dst[di] = '\0';
+    return true;
+}
+
+static esp_err_t read_form(httpd_req_t *req, char *body, size_t body_size)
+{
+    if (req->content_len <= 0 || req->content_len >= body_size)
+    {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    size_t received = 0;
+    unsigned int timeouts = 0;
+    while (received < req->content_len)
+    {
+        int ret = httpd_req_recv(req, body + received, req->content_len - received);
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT)
+        {
+            if (++timeouts >= 3)
+            {
+                return ESP_ERR_TIMEOUT;
+            }
+            continue;
+        }
+
+        if (ret <= 0)
+        {
+            return ESP_FAIL;
+        }
+        timeouts = 0;
+        received += ret;
+    }
+
+    body[received] = '\0';
+    return ESP_OK;
+}
+
+static bool form_ssid(const char *body, char *ssid, size_t ssid_size)
+{
+    char encoded[FRIEND_WIFI_SSID_MAX_LEN * 3 + 1] = {0};
+    return httpd_query_key_value(body, "ssid", encoded, sizeof(encoded)) == ESP_OK &&
+        url_decode(ssid, ssid_size, encoded) && ssid[0] != '\0';
+}
+
+static bool json_escape(const char *src, char *dst, size_t dst_size)
+{
+    size_t di = 0;
+    for (size_t si = 0; src[si] != '\0'; si++)
+    {
+        unsigned char c = (unsigned char)src[si];
+        if (c == '"' || c == '\\')
+        {
+            if (di + 2 >= dst_size)
+            {
+                return false;
+            }
+            dst[di++] = '\\';
+            dst[di++] = (char)c;
+        }
+        else if (c < 0x20)
+        {
+            if (di + 6 >= dst_size)
+            {
+                return false;
+            }
+            snprintf(dst + di, dst_size - di, "\\u%04x", c);
+            di += 6;
+        }
+        else
+        {
+            if (di + 1 >= dst_size)
+            {
+                return false;
+            }
+            dst[di++] = (char)c;
+        }
+    }
+
+    dst[di] = '\0';
+    return true;
 }
 
 static esp_err_t root_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "GET /");
 
-    size_t length = index_html_end - index_html_start;
+    bool setup = friend_wifi_get_state() == FRIEND_WIFI_STATE_MANUAL;
+    const char *start = setup ? index_html_start : home_html_start;
+    size_t length = setup ? (size_t)(index_html_end - index_html_start) : (size_t)(home_html_end - home_html_start);
 
-    if (length > 0 && index_html_start[length - 1] == '\0')
+    if (length > 0 && start[length - 1] == '\0')
     {
         length--;
     }
 
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, index_html_start, length);
+    return httpd_resp_send(req, start, length);
+}
+
+static esp_err_t home_js_handler(httpd_req_t *req)
+{
+    size_t length = home_js_end - home_js_start;
+    if (length > 0 && home_js_start[length - 1] == '\0') length--;
+    httpd_resp_set_type(req, "application/javascript; charset=utf-8");
+    return httpd_resp_send(req, home_js_start, length);
+}
+
+static esp_err_t status_handler(httpd_req_t *req)
+{
+    char ip[16] = {0};
+    bool online = friend_wifi_get_sta_ip(ip, sizeof(ip)) == ESP_OK;
+    char response[96];
+    snprintf(response, sizeof(response), "{\"online\":%s,\"ip\":\"%s\",\"display\":\"%s\",\"gifAvailable\":%s}",
+        online ? "true" : "false", ip, friend_media_current(), friend_media_gif_available() ? "true" : "false");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, response);
+}
+
+static esp_err_t media_upload_handler(httpd_req_t *req)
+{
+    if (friend_wifi_get_state() != FRIEND_WIFI_STATE_ONLINE)
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Home is not online");
+        return ESP_FAIL;
+    }
+
+    bool gif = strcmp(req->uri, "/api/media/gif") == 0;
+    if (gif && !friend_media_gif_available())
+    {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "GIF memory unavailable");
+    }
+    size_t limit = gif ? FRIEND_MEDIA_GIF_MAX_BYTES : FRIEND_MEDIA_STILL_BYTES;
+    if (req->content_len <= 0 || req->content_len > limit || (!gif && req->content_len != FRIEND_MEDIA_STILL_BYTES))
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid image size");
+        return ESP_FAIL;
+    }
+
+    uint8_t *data = heap_caps_malloc(req->content_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (data == NULL)
+    {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Not enough image memory");
+        return ESP_FAIL;
+    }
+
+    size_t received = 0;
+    unsigned int timeouts = 0;
+    while (received < req->content_len)
+    {
+        int count = httpd_req_recv(req, (char *)data + received, req->content_len - received);
+        if (count == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < 3) continue;
+        if (count <= 0)
+        {
+            free(data);
+            httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "Upload interrupted");
+            return ESP_FAIL;
+        }
+        timeouts = 0;
+        received += count;
+    }
+
+    if (gif)
+    {
+        bool signature = received >= 13 && memcmp(data, "GIF87a", 6) == 0;
+        signature = signature || (received >= 13 && memcmp(data, "GIF89a", 6) == 0);
+        unsigned int width = signature ? (unsigned int)data[6] | ((unsigned int)data[7] << 8) : 0;
+        unsigned int height = signature ? (unsigned int)data[8] | ((unsigned int)data[9] << 8) : 0;
+        if (!signature || width == 0 || height == 0 || width > FRIEND_MEDIA_WIDTH || height > FRIEND_MEDIA_HEIGHT || data[received - 1] != 0x3b)
+        {
+            free(data);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "GIF must be valid and at most 240x240");
+            return ESP_FAIL;
+        }
+    }
+
+    esp_err_t ret = friend_media_submit(gif ? FRIEND_MEDIA_GIF : FRIEND_MEDIA_STILL, data, received);
+    if (ret != ESP_OK)
+    {
+        free(data);
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "Display is busy");
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"queued\":true}");
+}
+
+static esp_err_t media_face_handler(httpd_req_t *req)
+{
+    if (friend_wifi_get_state() != FRIEND_WIFI_STATE_ONLINE || friend_media_submit(FRIEND_MEDIA_FACE, NULL, 0) != ESP_OK)
+    {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "Display is busy");
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"queued\":true}");
 }
 
 static esp_err_t style_css_handler(httpd_req_t *req)
@@ -143,23 +349,41 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req)
     }
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr_chunk(req, "{\"networks\":[");
+    if (httpd_resp_sendstr_chunk(req, "{\"networks\":[") != ESP_OK) return ESP_FAIL;
 
+    uint16_t visible_count = 0;
     for (uint16_t i = 0; i < count; i++)
     {
-        char item[160];
+        records[i].ssid[sizeof(records[i].ssid) - 1] = '\0';
+        if (records[i].ssid[0] == '\0') continue;
 
-        snprintf(item, sizeof(item), "%s{\"ssid\":\"%s\",\"rssi\":%d,\"channel\":%u}",
-            i > 0 ? "," : "",
-            (char *)records[i].ssid,
-            records[i].rssi,
-            records[i].primary);
+        bool strongest = true;
+        for (uint16_t j = 0; j < count; j++)
+        {
+            if (j == i) continue;
+            records[j].ssid[sizeof(records[j].ssid) - 1] = '\0';
+            if (strcmp((const char *)records[i].ssid, (const char *)records[j].ssid) == 0 &&
+                (records[j].rssi > records[i].rssi || (records[j].rssi == records[i].rssi && j < i)))
+            {
+                strongest = false;
+                break;
+            }
+        }
+        if (!strongest) continue;
 
-        httpd_resp_sendstr_chunk(req, item);
+        char escaped[FRIEND_WIFI_SSID_MAX_LEN * 6 + 1];
+        if (!json_escape((const char *)records[i].ssid, escaped, sizeof(escaped))) continue;
+
+        char item[280];
+        int len = snprintf(item, sizeof(item), "%s{\"ssid\":\"%s\",\"rssi\":%d,\"channel\":%u,\"saved\":%s}",
+            visible_count > 0 ? "," : "", escaped, records[i].rssi, records[i].primary,
+            friend_wifi_store_is_saved((const char *)records[i].ssid) ? "true" : "false");
+        if (len < 0 || len >= (int)sizeof(item) || httpd_resp_sendstr_chunk(req, item) != ESP_OK) return ESP_FAIL;
+        visible_count++;
     }
 
-    httpd_resp_sendstr_chunk(req, "]}");
-    httpd_resp_sendstr_chunk(req, NULL);
+    if (httpd_resp_sendstr_chunk(req, "]}") != ESP_OK) return ESP_FAIL;
+    if (httpd_resp_sendstr_chunk(req, NULL) != ESP_OK) return ESP_FAIL;
 
     ESP_LOGI(TAG, "GET /api/wifi/scan -> %u networks", count);
 
@@ -168,99 +392,118 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req)
 
 static esp_err_t wifi_connect_handler(httpd_req_t *req)
 {
-    if (req->content_len <= 0 || req->content_len >= 256)
+    if (friend_wifi_get_state() != FRIEND_WIFI_STATE_MANUAL)
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Manual setup is not active");
+        return ESP_FAIL;
+    }
+
+    char body[320] = {0};
+    if (read_form(req, body, sizeof(body)) != ESP_OK)
     {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid request");
         return ESP_FAIL;
     }
 
-    char body[256] = {0};
-
-    size_t received = 0;
-
-    while (received < req->content_len)
-    {
-        int ret = httpd_req_recv(req, body + received, req->content_len - received);
-
-        if (ret == HTTPD_SOCK_ERR_TIMEOUT)
-        {
-            continue;
-        }
-
-        if (ret <= 0)
-        {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive request");
-            return ESP_FAIL;
-        }
-
-        received += ret;
-    }
-
-    body[received] = '\0';
-
-    char encoded_ssid[96] = {0};
-    char encoded_password[128] = {0};
-
-    esp_err_t ret = httpd_query_key_value(body, "ssid", encoded_ssid, sizeof(encoded_ssid));
-
-    if (ret != ESP_OK)
-    {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing SSID");
-        return ret;
-    }
-
-    ret = httpd_query_key_value(body, "password", encoded_password, sizeof(encoded_password));
-
-    if (ret != ESP_OK)
-    {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing password");
-        return ret;
-    }
-
-    char ssid[33] = {0};
-    char password[65] = {0};
-
-    url_decode(ssid, sizeof(ssid), encoded_ssid);
-    url_decode(password, sizeof(password), encoded_password);
-
-    if (strlen(ssid) == 0)
+    char ssid[FRIEND_WIFI_SSID_MAX_LEN + 1] = {0};
+    if (!form_ssid(body, ssid, sizeof(ssid)))
     {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid SSID");
-        return ESP_ERR_INVALID_ARG;
+        return ESP_FAIL;
+    }
+
+    char password[FRIEND_WIFI_PASSWORD_MAX_LEN + 1] = {0};
+    bool saved = friend_wifi_store_is_saved(ssid);
+    if (saved)
+    {
+        if (friend_wifi_store_get(ssid, password, sizeof(password)) != ESP_OK)
+        {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Saved network unavailable");
+            return ESP_FAIL;
+        }
+    }
+    else
+    {
+        char encoded[FRIEND_WIFI_PASSWORD_MAX_LEN * 3 + 1] = {0};
+        if (httpd_query_key_value(body, "password", encoded, sizeof(encoded)) != ESP_OK ||
+            !url_decode(password, sizeof(password), encoded))
+        {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid password");
+            return ESP_FAIL;
+        }
     }
 
     ESP_LOGI(TAG, "POST /api/wifi/connect SSID=%s", ssid);
 
-    ret = friend_wifi_connect(ssid, password, 15000);
+    esp_err_t ret = saved && friend_wifi_is_connected_to(ssid) ? ESP_OK : friend_wifi_connect(ssid, password, 15000);
 
     if (ret == ESP_OK)
     {
-        ret = friend_wifi_store_save(ssid, password);
+        if (!saved) ret = friend_wifi_store_save(ssid, password);
+        memset(password, 0, sizeof(password));
+        memset(body, 0, sizeof(body));
 
         if (ret == ESP_OK)
         {
-            ESP_LOGI(TAG, "Wi-Fi credentials verified and saved");
-
             httpd_resp_set_type(req, "application/json");
-            httpd_resp_sendstr(req, "{\"success\":true}");
-
-            return ESP_OK;
+            char ip[16] = {0};
+            if (friend_wifi_get_sta_ip(ip, sizeof(ip)) != ESP_OK) return ESP_FAIL;
+            char response[64];
+            snprintf(response, sizeof(response), "{\"success\":true,\"ip\":\"%s\"}", ip);
+            ret = httpd_resp_sendstr(req, response);
+            if (ret == ESP_OK) friend_wifi_finish_manual_mode();
+            return ret;
         }
 
         ESP_LOGE(TAG, "Wi-Fi connected but failed to save credentials: %s", esp_err_to_name(ret));
 
         httpd_resp_set_type(req, "application/json");
-        httpd_resp_sendstr(req, "{\"success\":false}");
+        httpd_resp_sendstr(req, "{\"success\":false,\"reason\":\"save_failed\"}");
 
         return ESP_OK;
     }
 
-    ESP_LOGW(TAG, "Wi-Fi credentials rejected, not saved");
+    memset(password, 0, sizeof(password));
+    memset(body, 0, sizeof(body));
+    ESP_LOGW(TAG, "Wi-Fi connection failed: %s", esp_err_to_name(ret));
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"success\":false}");
 
     return ESP_OK;
+}
+
+static esp_err_t wifi_forget_handler(httpd_req_t *req)
+{
+    char body[128] = {0};
+    if (friend_wifi_get_state() != FRIEND_WIFI_STATE_MANUAL || read_form(req, body, sizeof(body)) != ESP_OK)
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid request");
+        return ESP_FAIL;
+    }
+
+    char ssid[FRIEND_WIFI_SSID_MAX_LEN + 1] = {0};
+    if (!form_ssid(body, ssid, sizeof(ssid)))
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid SSID");
+        return ESP_FAIL;
+    }
+
+    esp_err_t ret = friend_wifi_store_forget(ssid);
+    if (ret == ESP_ERR_NOT_FOUND)
+    {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Network is not saved");
+        return ESP_FAIL;
+    }
+
+    if (ret != ESP_OK)
+    {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Could not forget network");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"success\":true}");
 }
 
 esp_err_t friend_http_start(void)
@@ -273,6 +516,7 @@ esp_err_t friend_http_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
+    config.max_uri_handlers = 12;
 
     ESP_LOGI(TAG, "Starting HTTP server with stack=%u", config.stack_size);
 
@@ -320,14 +564,52 @@ esp_err_t friend_http_start(void)
         .user_ctx = NULL,
     };
 
+    const httpd_uri_t wifi_forget_uri = {
+        .uri = "/api/wifi/forget",
+        .method = HTTP_POST,
+        .handler = wifi_forget_handler,
+        .user_ctx = NULL,
+    };
+
+    const httpd_uri_t home_js_uri = {
+        .uri = "/home.js", .method = HTTP_GET, .handler = home_js_handler,
+    };
+    const httpd_uri_t status_uri = {
+        .uri = "/api/status", .method = HTTP_GET, .handler = status_handler,
+    };
+    const httpd_uri_t still_uri = {
+        .uri = "/api/media/still", .method = HTTP_POST, .handler = media_upload_handler,
+    };
+    const httpd_uri_t gif_uri = {
+        .uri = "/api/media/gif", .method = HTTP_POST, .handler = media_upload_handler,
+    };
+    const httpd_uri_t face_uri = {
+        .uri = "/api/media/face", .method = HTTP_POST, .handler = media_face_handler,
+    };
+
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &root_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &style_css_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &app_js_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &wifi_scan_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &wifi_connect_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &wifi_forget_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &home_js_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &status_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &still_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &gif_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &face_uri));
 
     ESP_LOGI(TAG, "HTTP server ready");
-    ESP_LOGI(TAG, "Open http://192.168.4.1");
+    ESP_LOGI(TAG, "Home on STA IP; setup at http://192.168.4.1 while AP is active");
 
     return ESP_OK;
+}
+
+esp_err_t friend_http_stop(void)
+{
+    if (server == NULL) return ESP_OK;
+
+    esp_err_t ret = httpd_stop(server);
+    if (ret == ESP_OK) server = NULL;
+    return ret;
 }

@@ -1,8 +1,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <string.h>
 
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "lvgl.h"
 
@@ -10,6 +12,7 @@
 #include "board/board_buttons.h"
 #include "board/board_audio.h"
 #include "ui/friend_ui.h"
+#include "ui/friend_media.h"
 #include "network/friend_wifi.h"
 #include "network/friend_wifi_store.h"
 
@@ -19,6 +22,7 @@ static const char *TAG = "FriendOS";
 #define FRIEND_UI_TASK_PRIORITY   4
 #define FRIEND_UI_TASK_DELAY_MS   10
 #define FRIEND_UI_STACK_LOG_MS    10000
+#define FRIEND_GIF_PERF_LOG_MS    5000
 
 static void friend_ui_task(void *arg)
 {
@@ -27,12 +31,46 @@ static void friend_ui_task(void *arg)
     ESP_LOGI(TAG, "UI task started, stack=%d bytes", FRIEND_UI_TASK_STACK_SIZE);
 
     TickType_t last_stack_log = xTaskGetTickCount();
+    TickType_t last_perf_log = last_stack_log;
+    uint32_t handler_count = 0;
+    uint32_t handler_total_us = 0;
+    uint32_t handler_max_us = 0;
 
     while (1)
     {
+        friend_media_process();
+        int64_t handler_started_us = esp_timer_get_time();
         lv_timer_handler();
+        uint32_t handler_elapsed_us = (uint32_t)(esp_timer_get_time() - handler_started_us);
+        handler_count++;
+        handler_total_us += handler_elapsed_us;
+        if (handler_elapsed_us > handler_max_us) handler_max_us = handler_elapsed_us;
 
         TickType_t now = xTaskGetTickCount();
+
+        if ((now - last_perf_log) >= pdMS_TO_TICKS(FRIEND_GIF_PERF_LOG_MS))
+        {
+            board_display_perf_t perf;
+            board_display_perf_take(&perf);
+
+            if (strcmp(friend_media_current(), "gif") == 0)
+            {
+                uint32_t interval_ms = (uint32_t)pdTICKS_TO_MS(now - last_perf_log);
+                uint32_t fps_tenths = interval_ms > 0 ? perf.render_count * 10000 / interval_ms : 0;
+                ESP_LOGI(TAG, "GIF perf/%ums: render=%u (%u.%u fps), gap avg/max=%u/%u ms, render avg/max=%u/%u us, flush wait=%u us max=%u us, flush=%u/%u px, LVGL avg/max=%u/%u us",
+                    interval_ms, perf.render_count, fps_tenths / 10, fps_tenths % 10,
+                    perf.render_gap_count ? perf.render_gap_total_us / perf.render_gap_count / 1000 : 0, perf.render_gap_max_us / 1000,
+                    perf.render_count ? perf.render_total_us / perf.render_count : 0, perf.render_max_us,
+                    perf.flush_wait_total_us, perf.flush_wait_max_us,
+                    perf.flush_count, perf.flush_pixels,
+                    handler_count ? handler_total_us / handler_count : 0, handler_max_us);
+            }
+
+            last_perf_log = now;
+            handler_count = 0;
+            handler_total_us = 0;
+            handler_max_us = 0;
+        }
 
         if ((now - last_stack_log) >= pdMS_TO_TICKS(FRIEND_UI_STACK_LOG_MS))
         {
@@ -53,6 +91,8 @@ void app_main(void)
 
     ESP_ERROR_CHECK(board_display_init());
     ESP_ERROR_CHECK(friend_ui_init());
+    esp_err_t media_ret = friend_media_init();
+    if (media_ret != ESP_OK) ESP_LOGW(TAG, "Media unavailable: %s", esp_err_to_name(media_ret));
     ESP_ERROR_CHECK(board_buttons_init());
     ESP_ERROR_CHECK(board_audio_init());
 

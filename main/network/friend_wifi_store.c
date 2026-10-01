@@ -352,7 +352,9 @@ bool friend_wifi_store_is_saved(const char *ssid)
 
     char password[FRIEND_WIFI_PASSWORD_MAX_LEN + 1] = {0};
 
-    return friend_wifi_store_get(ssid, password, sizeof(password)) == ESP_OK;
+    bool saved = friend_wifi_store_get(ssid, password, sizeof(password)) == ESP_OK;
+    memset(password, 0, sizeof(password));
+    return saved;
 }
 
 size_t friend_wifi_store_count(void)

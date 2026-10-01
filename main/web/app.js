@@ -15,15 +15,22 @@ function signalText(rssi) {
 }
 
 let selectedSsid = "";
+let busy = false;
 
-function selectWifi(ssid) {
-    selectedSsid = ssid;
+function selectWifi(network) {
+    if (busy) return;
+    if (network.saved) {
+        connectWifi(network.ssid);
+        return;
+    }
+
+    selectedSsid = network.ssid;
 
     const panel = document.getElementById("passwordPanel");
     const ssidLabel = document.getElementById("selectedSsid");
     const password = document.getElementById("wifiPassword");
 
-    ssidLabel.textContent = ssid;
+    ssidLabel.textContent = network.ssid;
     password.value = "";
 
     panel.classList.remove("hidden");
@@ -44,21 +51,22 @@ document.getElementById("togglePassword").addEventListener("click", () => {
     }
 });
 
-document.getElementById("connectButton").addEventListener("click", async () => {
-    const password = document.getElementById("wifiPassword").value;
+async function connectWifi(ssid, password) {
+    if (busy) return;
+
     const button = document.getElementById("connectButton");
+    const status = document.getElementById("status");
 
-    if (!selectedSsid) {
-        return;
-    }
-
+    busy = true;
     button.disabled = true;
     button.textContent = "Đang kết nối...";
+    status.style.display = "block";
+    status.textContent = "Đang kết nối " + ssid + "...";
 
     try {
         const body = new URLSearchParams();
-        body.append("ssid", selectedSsid);
-        body.append("password", password);
+        body.append("ssid", ssid);
+        if (password !== undefined) body.append("password", password);
 
         const response = await fetch("/api/wifi/connect", {
             method: "POST",
@@ -75,21 +83,62 @@ document.getElementById("connectButton").addEventListener("click", async () => {
         const result = await response.json();
 
         if (result.success) {
-            alert("Kết nối Wi-Fi thành công!");
+            status.textContent = "Đã kết nối Wi-Fi. Mộc đang chuyển sang Home.";
+            document.getElementById("passwordPanel").classList.add("hidden");
+            document.getElementById("networks").classList.add("hidden");
+            document.getElementById("refreshButton").classList.add("hidden");
+            const url = "http://" + result.ip + "/";
+            document.getElementById("homeLink").href = url;
+            document.getElementById("homeAddress").textContent = url;
+            document.getElementById("homeHandoff").classList.remove("hidden");
+            return;
         }
         else {
-            alert("Không thể kết nối Wi-Fi. Kiểm tra lại mật khẩu.");
+            status.textContent = result.reason === "save_failed"
+                ? "Đã kết nối nhưng không lưu được mạng. Hãy quên một mạng đã lưu rồi thử lại."
+                : "Không thể kết nối Wi-Fi. Kiểm tra lại mật khẩu hoặc tín hiệu.";
         }
     }
     catch (error) {
-        alert("Không thể gửi yêu cầu kết nối.");
+        status.textContent = "Không thể gửi yêu cầu kết nối.";
     }
 
     button.disabled = false;
     button.textContent = "Kết nối";
+    busy = false;
+}
+
+document.getElementById("connectButton").addEventListener("click", () => {
+    if (!selectedSsid) return;
+    connectWifi(selectedSsid, document.getElementById("wifiPassword").value);
 });
 
+async function forgetWifi(ssid) {
+    if (busy || !confirm("Quên mạng " + ssid + "?")) return;
+    busy = true;
+    const status = document.getElementById("status");
+
+    try {
+        const body = new URLSearchParams({ ssid });
+        const response = await fetch("/api/wifi/forget", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: body.toString(),
+        });
+        if (!response.ok) throw new Error("Forget failed");
+        busy = false;
+        await scanWifi();
+    }
+    catch (error) {
+        status.style.display = "block";
+        status.textContent = "Không thể quên mạng Wi-Fi.";
+        busy = false;
+    }
+}
+
 async function scanWifi() {
+    if (busy) return;
+    busy = true;
     const status = document.getElementById("status");
     const list = document.getElementById("networks");
 
@@ -105,6 +154,7 @@ async function scanWifi() {
         }
 
         const data = await response.json();
+        busy = false;
 
         status.style.display = "none";
 
@@ -115,10 +165,12 @@ async function scanWifi() {
         }
 
         data.networks.forEach(network => {
+            const row = document.createElement("div");
+            row.className = "network-row";
             const button = document.createElement("button");
             button.className = "network";
             button.type = "button";
-            button.onclick = () => selectWifi(network.ssid);
+            button.onclick = () => selectWifi(network);
 
             const ssid = document.createElement("div");
             ssid.className = "ssid";
@@ -126,14 +178,25 @@ async function scanWifi() {
 
             const info = document.createElement("div");
             info.className = "info";
-            info.textContent = signalText(network.rssi) + " · " + network.rssi + " dBm · Kênh " + network.channel;
+            info.textContent = signalText(network.rssi) + " · " + network.rssi + " dBm · Kênh " + network.channel + (network.saved ? " · Đã lưu" : "");
 
             button.appendChild(ssid);
             button.appendChild(info);
-            list.appendChild(button);
+            row.appendChild(button);
+            if (network.saved) {
+                const forget = document.createElement("button");
+                forget.className = "forget";
+                forget.type = "button";
+                forget.textContent = "Quên";
+                forget.setAttribute("aria-label", "Quên mạng " + network.ssid);
+                forget.onclick = () => forgetWifi(network.ssid);
+                row.appendChild(forget);
+            }
+            list.appendChild(row);
         });
     }
     catch (error) {
+        busy = false;
         status.style.display = "block";
         status.textContent = "Không thể quét Wi-Fi";
     }

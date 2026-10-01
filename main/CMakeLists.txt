@@ -5,6 +5,8 @@ idf_component_register(
         "board/board_buttons.c"
         "board/board_audio.c"
         "ui/friend_ui.c"
+        "ui/friend_media.c"
+        "ui/friend_gif.c"
         "network/friend_wifi.c"
         "network/friend_http.c"
         "network/friend_wifi_store.c"
@@ -23,4 +25,6 @@ idf_component_register(
         "web/index.html"
         "web/style.css"
         "web/app.js"
+        "web/home.html"
+        "web/home.js"
 )
