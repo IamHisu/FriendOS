@@ -2,7 +2,20 @@ idf_component_register(
     SRCS
         "main.c"
         "board/board_display.c"
+        "board/board_buttons.c"
+        "board/board_audio.c"
         "ui/friend_ui.c"
-    INCLUDE_DIRS
-        "."
+        "network/friend_wifi.c"
+        "network/friend_http.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        esp_http_server
+        esp_wifi
+        esp_netif
+        nvs_flash
+        esp_driver_spi
+        esp_driver_gpio
+        esp_driver_i2s
+        esp_lcd
+        esp_timer
 )
