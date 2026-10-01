@@ -1,8 +1,7 @@
 # FriendOS --- Project Handoff & Development Guide
 
-> Last updated: 2026-09-30\
-> Status: Display + LVGL + Mộc Face UI validated; next: Buttons
-> bring-up\
+> Last updated: 2026-10-01\
+> Status: Display/UI + Buttons + Microphone + Wi-Fi manager/manual provisioning validated; next: complete Manual Wi-Fi saved-network UX\
 > Platform: ESP32-S3 / ESP-IDF 5.5.5
 
 ------------------------------------------------------------------------
@@ -1085,3 +1084,344 @@ Thứ tự tiếp theo:
 
 **Do not jump directly to OpenAI/FriendLink before the underlying
 hardware layers are validated.**
+
+------------------------------------------------------------------------
+
+# 27. UPDATE --- 2026-10-01 CURRENT AUTHORITATIVE CHECKPOINT
+
+> **This section supersedes older `Current Bring-up Status`, `Immediate Next Task`, and `CURRENT CHECKPOINT` sections above where they conflict.** Older sections are retained as development history.
+
+## 27.1 Hardware / board status
+
+``` text
+ESP32-S3                         PASS
+Flash 16 MB                      PASS
+PSRAM 8 MB Octal @ 40 MHz        PASS
+ST7789 240×240                   PASS
+LVGL 9                           PASS
+Buttons GPIO0/10/39              PASS
+Microphone I2S                   PASS
+Speaker hardware/source pinout   KNOWN; FriendOS TX driver deferred
+Battery ADC                      DEFERRED / NOT VALIDATED
+```
+
+Confirmed buttons are active LOW. FriendOS uses `espressif/button` 4.2.1. BOOT has normal long-press handling plus a dedicated ~5000 ms hold event used to enter Manual Wi-Fi Setup. Holding BOOT does **not** erase saved Wi-Fi networks.
+
+Confirmed microphone configuration:
+
+``` c
+#define MIC_WS   4
+#define MIC_SCK  5
+#define MIC_SD   6
+```
+
+I2S RX was validated at 16 kHz, 32-bit mono Philips, left slot. Raw PCM responds correctly to sound.
+
+Speaker pinout confirmed from the Zhengchen/Xiaozhi board source:
+
+``` c
+#define SPK_DOUT 7
+#define SPK_BCLK 15
+#define SPK_LRCK 16
+```
+
+FriendOS speaker TX driver is intentionally deferred.
+
+## 27.2 Current source structure
+
+``` text
+main/
+├── CMakeLists.txt
+├── main.c
+├── board/
+│   ├── board_config.h
+│   ├── board_display.h
+│   ├── board_display.c
+│   ├── board_buttons.h
+│   ├── board_buttons.c
+│   ├── board_audio.h
+│   └── board_audio.c
+├── ui/
+│   ├── friend_ui.h
+│   └── friend_ui.c
+├── network/
+│   ├── friend_wifi.h
+│   ├── friend_wifi.c
+│   ├── friend_http.h
+│   ├── friend_http.c
+│   ├── friend_wifi_store.h
+│   └── friend_wifi_store.c
+└── web/
+    ├── index.html
+    ├── style.css
+    └── app.js
+```
+
+Responsibilities:
+
+- `board_config.h`: board-specific pins/config only.
+- `board_display.c`: SPI/ST7789/backlight/LVGL display bridge.
+- `board_buttons.c`: physical buttons via `espressif/button`.
+- `board_audio.c`: microphone bring-up.
+- `friend_ui.c`: Mộc face/emotion/action UI.
+- `friend_wifi.c`: Wi-Fi driver + Wi-Fi manager/state machine.
+- `friend_wifi_store.c`: FriendOS-owned persistent multi-network credentials in NVS.
+- `friend_http.c`: Manual Setup HTTP server/API.
+- `web/*`: embedded provisioning frontend.
+- `main.c`: orchestration only.
+
+Do not over-abstract into separate ESP-IDF components yet.
+
+## 27.3 Partition table
+
+Project now uses ESP-IDF preset **Two large size OTA partitions**:
+
+``` text
+nvs       data nvs    0x9000    24K
+otadata   data ota    0xf000     8K
+phy_init  data phy    0x11000    4K
+ota_0     app ota_0  0x20000    0x1a9000
+ota_1     app ota_1  0x1d0000   0x1a9000
+```
+
+Board has 16 MB flash, so significant flash remains unused by this preset. A custom partition table may later allocate larger OTA/filesystem/assets, but **do not change it during the current Wi-Fi work**.
+
+## 27.4 Saved Wi-Fi store
+
+FriendOS now owns Wi-Fi persistence; Wi-Fi driver storage is RAM-only. Saved networks are stored in NVS namespace `friend_wifi`.
+
+Current store supports up to 8 networks:
+
+``` c
+#define FRIEND_WIFI_MAX_SAVED_NETWORKS 8
+#define FRIEND_WIFI_SSID_MAX_LEN       32
+#define FRIEND_WIFI_PASSWORD_MAX_LEN   64
+```
+
+Public operations include save, get by SSID, forget, get all, is-saved, count, and clear. Legacy single-network `ssid`/`password` keys are migrated to the indexed format on initialization.
+
+Important: do not place an array of 8 `friend_wifi_saved_network_t` structures on `app_main` stack. This previously contributed to a main-task stack overflow.
+
+## 27.5 Wi-Fi manager --- validated normal mode
+
+Normal behavior is now:
+
+``` text
+BOOT
+ ↓
+scan visible Wi-Fi
+ ↓
+find visible saved SSIDs
+ ↓
+choose strongest saved SSID
+ ↓
+connect
+ ↓
+ONLINE
+```
+
+If no saved network is visible, FriendOS stays OFFLINE and scans again every 5 seconds. It does **not** automatically open provisioning just because the router disappears.
+
+When ONLINE, FriendOS does not periodically scan/roam. It waits for disconnect. On disconnect it returns to OFFLINE scanning and reconnects when a saved network becomes visible again.
+
+Validated:
+
+``` text
+Normal boot scan                 PASS
+Saved SSID matching              PASS
+Auto connect                     PASS
+GOT_IP                           PASS
+ONLINE no periodic scan          PASS
+Runtime disconnect detection     PASS
+OFFLINE scan every 5 s           PASS
+Failed connection recovery       PASS
+Network returns -> reconnect     PASS
+No reconnect collision           PASS
+```
+
+For same-SSID multiple BSSIDs, STA configuration uses `WIFI_ALL_CHANNEL_SCAN` and `WIFI_CONNECT_AP_BY_SIGNAL`.
+
+## 27.6 Manual Wi-Fi Setup --- validated infrastructure
+
+Holding BOOT for about 5 seconds requests Manual Setup.
+
+Validated flow:
+
+``` text
+BOOT held 5 s
+ ↓
+FRIEND_WIFI_STATE_MANUAL
+ ↓
+Wi-Fi APSTA
+ ↓
+SoftAP: Moc-Setup
+ ↓
+AP IP: 192.168.4.1
+ ↓
+HTTP provisioning server
+ ↓
+embedded HTML/CSS/JS
+ ↓
+manual Wi-Fi scan
+```
+
+Validated:
+
+``` text
+BOOT long press 5 s              PASS
+Enter MANUAL state               PASS
+STA -> APSTA                      PASS
+Moc-Setup SoftAP                 PASS
+DHCP 192.168.4.1                 PASS
+Phone joins AP                   PASS
+HTTP provisioning                PASS
+Embedded HTML/CSS/JS             PASS
+Manual Wi-Fi scan                PASS
+```
+
+Current provisioning frontend/API is **not finished**. Specifically, it still does not expose whether a scanned SSID is saved, and clicking an already-saved network still asks the browser for a password. This is the immediate next task.
+
+Required final Manual Setup behavior:
+
+``` text
+Saved SSID
+  -> display as "Đã lưu"
+  -> user taps it
+  -> ESP32 retrieves password from NVS server-side
+  -> connect without exposing/requesting password in browser
+
+Unsaved SSID
+  -> user taps it
+  -> browser asks password
+  -> connect
+  -> only after GOT_IP save credential to NVS
+
+Saved SSID
+  -> provide Forget/Delete action
+  -> remove credential from NVS
+```
+
+Passwords stored in NVS must never be returned to HTML/JavaScript/API responses.
+
+A current edge case is also confirmed: if Manual Setup is entered while STA is already connected to the same SSID, the old HTTP connect flow calls `esp_wifi_connect()` again and ESP-IDF logs that STA is already connected. The new Manual Setup flow must handle the already-connected SSID cleanly instead of treating it as bad credentials.
+
+## 27.7 HTTP provisioning implementation notes
+
+Current HTTP server uses official ESP-IDF `esp_http_server` with an 8192-byte server stack.
+
+Embedded files use `EMBED_TXTFILES`. ESP-IDF appends a trailing NUL; responses must exclude that trailing `\0` or JavaScript may fail to execute.
+
+POST request bodies must be received in a loop until the complete body is read.
+
+`/favicon.ico` 404 is harmless. `httpd_sock_err: error in recv : 104` can occur when the client closes/resets the socket and is not itself a firmware crash if the server continues running.
+
+Existing API foundation:
+
+``` text
+GET  /
+GET  /style.css
+GET  /app.js
+GET  /api/wifi/scan
+POST /api/wifi/connect
+```
+
+Next API work should add saved-state information to scan results and a Forget/Delete endpoint. SSIDs must be JSON-escaped correctly.
+
+## 27.8 Main-task stack overflow --- fixed architecture
+
+A real crash was observed:
+
+``` text
+***ERROR*** A stack overflow in task main has been detected.
+```
+
+The old architecture kept `app_main()` alive forever and serviced `lv_timer_handler()` from the ESP-IDF main task. FriendOS now starts a dedicated UI task and allows `app_main()` to return.
+
+Current design:
+
+``` text
+app_main
+  -> initialize display/UI/buttons/audio/Wi-Fi
+  -> start Wi-Fi manager
+  -> start dedicated friend_ui task
+  -> return
+
+friend_ui task
+  -> lv_timer_handler()
+  -> delay
+```
+
+Runtime validation after the change:
+
+``` text
+Main task minimum free stack before UI task: 1524 bytes
+main_task: Returned from app_main()
+UI task stack size: 8192 bytes
+UI task minimum free stack: ~4264 bytes after >200 s
+```
+
+The device remained stable through normal Wi-Fi connection, BOOT 5-second Manual Setup, SoftAP, HTTP requests, Wi-Fi scans, and repeated UI processing. No reboot occurred during the >200-second validation run.
+
+**Checkpoint: main-task stack overflow / reboot FIXED.**
+
+Important LVGL rule going forward: LVGL is not to be called directly from arbitrary Wi-Fi/AI tasks. Future cross-task UI changes should be dispatched to the dedicated UI context/queue.
+
+## 27.9 Current `main.c` lifecycle
+
+`app_main()` is now initialization/orchestration only. It creates a dedicated `friend_ui` task (8192-byte stack) that periodically calls `lv_timer_handler()`, then `app_main()` returns.
+
+Do not reintroduce an infinite LVGL loop into `app_main()`.
+
+## 27.10 Development rules established during bring-up
+
+Before implementing a new subsystem/hardware feature:
+
+1. Check official **ESP-IoT-Solution** documentation first.
+2. If it does not cover the required detail, use official **ESP-IDF / Espressif** documentation/source.
+3. Prefer established Espressif/expert solutions for generic subsystem problems before inventing a custom implementation.
+4. Custom-design only the policy/behavior specific to FriendOS/Mộc.
+5. Develop incrementally: one change -> test -> checkpoint -> continue.
+
+Code style currently expected:
+
+- compact C style;
+- function signatures/calls stay on one line when practical;
+- assignments stay on one line;
+- braces on their own lines;
+- one blank line after a closing brace before the next logical block;
+- avoid vertically splitting arguments unless necessary.
+
+## 27.11 Git state
+
+Repository:
+
+``` text
+H:\HISU\Esp32Project-AI\FriendOS
+branch: main
+remote: private GitHub repository
+```
+
+`build/`, `managed_components/`, `sdkconfig.old`, `.vscode/`, etc. are ignored. `sdkconfig` is intentionally tracked.
+
+**Do not commit the current Wi-Fi/manual-setup work yet.** Wait until the complete new Wi-Fi manager + Manual Setup saved-network flow passes.
+
+## 27.12 Immediate next task
+
+Do **not** redo display, buttons, microphone, normal Wi-Fi manager, or stack debugging unless a new regression appears.
+
+Current next task:
+
+``` text
+Manual Wi-Fi Setup UX/API
+  1. /api/wifi/scan marks saved networks
+  2. frontend displays "Đã lưu"
+  3. tapping saved SSID connects with NVS password
+  4. unsaved SSID asks for password
+  5. successful unsaved connection saves after GOT_IP
+  6. Forget/Delete saved SSID
+  7. handle already-connected SSID
+  8. cleanly leave MANUAL mode after successful connection
+```
+
+After this passes, make a checkpoint before moving to the next FriendOS subsystem.
+

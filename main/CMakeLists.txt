@@ -7,6 +7,7 @@ idf_component_register(
         "ui/friend_ui.c"
         "network/friend_wifi.c"
         "network/friend_http.c"
+        "network/friend_wifi_store.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_http_server
@@ -18,4 +19,8 @@ idf_component_register(
         esp_driver_i2s
         esp_lcd
         esp_timer
+    EMBED_TXTFILES
+        "web/index.html"
+        "web/style.css"
+        "web/app.js"
 )
