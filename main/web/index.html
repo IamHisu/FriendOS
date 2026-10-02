@@ -9,7 +9,7 @@
 <body>
     <main class="card">
         <h1>Mộc Setup</h1>
-        <p class="subtitle">Chọn Wi-Fi cho Mộc</p>
+        <p id="subtitle" class="subtitle">Chọn Wi-Fi cho Mộc</p>
 
         <div id="status">Đang quét Wi-Fi...</div>
         <div id="homeHandoff" class="handoff hidden">
@@ -25,7 +25,7 @@
             <label for="wifiPassword">Mật khẩu</label>
                 
             <div class="password-row">
-                <input id="wifiPassword" type="password" placeholder="Nhập mật khẩu Wi-Fi">
+                <input id="wifiPassword" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Nhập mật khẩu Wi-Fi">
                 <button id="togglePassword" class="toggle-password" type="button">Hiện</button>
             </div>
         

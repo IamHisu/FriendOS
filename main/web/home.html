@@ -13,17 +13,26 @@
             <span id="connection">Đang kết nối...</span>
         </header>
         <section>
+            <div class="stage">
+                <div class="device">
+                    <div class="screen">
+                        <img id="preview" class="preview hidden" alt="Ảnh đã chọn">
+                        <div id="screenEmpty" class="screen-empty">Đang đọc màn hình...</div>
+                    </div>
+                </div>
+            </div>
             <h2>Màn hình TFT</h2>
             <p id="displayState">Đang đọc trạng thái...</p>
             <div class="actions">
                 <label class="file-picker" for="imageFile">Chọn ảnh<input id="imageFile" type="file" accept="image/jpeg,image/png,image/gif,.jpg,.jpeg,.png,.gif"></label>
                 <button id="showFace" type="button">Hiện mặt Mộc</button>
             </div>
-            <img id="preview" class="preview hidden" alt="Ảnh đã chọn">
             <p id="uploadStatus" role="status"></p>
-            <p class="muted">JPG/PNG tự thu vừa màn 240×240. GIF động giữ nguyên kích thước, tối đa 240×240 và 1 MB. Ảnh sẽ mất khi Mộc khởi động lại.</p>
+            <p id="gifNotice" class="muted"></p>
+            <p class="muted">JPG/PNG tự thu vừa màn 240×240. GIF động lớn hơn 240×240 sẽ được thu nhỏ trên trình duyệt (kết quả tối đa 1 MB). Ảnh sẽ mất khi Mộc khởi động lại.</p>
         </section>
     </main>
+    <script src="/gif-resize.js"></script>
     <script src="/home.js"></script>
 </body>
 </html>

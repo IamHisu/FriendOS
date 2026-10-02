@@ -9,6 +9,7 @@
 #include "driver/spi_master.h"
 
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
@@ -22,7 +23,8 @@
 // Configuration
 // ============================================================
 
-#define LVGL_BUFFER_LINES 40
+#define LVGL_BUFFER_LINES 60
+#define LVGL_BUFFER_FALLBACK_LINES 20
 
 
 // ============================================================
@@ -35,7 +37,6 @@ static esp_lcd_panel_handle_t s_panel = NULL;
 static lv_display_t *s_lvgl_display = NULL;
 
 static uint8_t *s_lvgl_buf1 = NULL;
-static uint8_t *s_lvgl_buf2 = NULL;
 static board_display_perf_t s_perf;
 static int64_t s_render_started_us;
 static int64_t s_previous_render_started_us;
@@ -199,10 +200,10 @@ esp_err_t board_display_init(void)
     esp_lcd_panel_io_spi_config_t io_config = {
         .dc_gpio_num = LCD_DC,
         .cs_gpio_num = LCD_CS,
-        .pclk_hz = 20 * 1000 * 1000,
+        .pclk_hz = 80 * 1000 * 1000,
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
-        .spi_mode = 0,
+        .spi_mode = 3,
         .trans_queue_depth = 10,
     };
 
@@ -285,20 +286,27 @@ esp_err_t board_display_init(void)
     // LVGL render buffers
     // --------------------------------------------------------
 
-    size_t buffer_size = LCD_WIDTH * LVGL_BUFFER_LINES * sizeof(uint16_t);
+    size_t buffer_lines = LVGL_BUFFER_LINES;
+    size_t buffer_size = LCD_WIDTH * buffer_lines * sizeof(uint16_t);
+    s_lvgl_buf1 = heap_caps_malloc(buffer_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
 
-    s_lvgl_buf1 = malloc(buffer_size);
-    s_lvgl_buf2 = malloc(buffer_size);
-
-    if (s_lvgl_buf1 == NULL || s_lvgl_buf2 == NULL)
+    if (s_lvgl_buf1 == NULL)
     {
-        ESP_LOGE(TAG, "Failed to allocate LVGL buffers");
-        return ESP_ERR_NO_MEM;
+        buffer_lines = LVGL_BUFFER_FALLBACK_LINES;
+        buffer_size = LCD_WIDTH * buffer_lines * sizeof(uint16_t);
+        s_lvgl_buf1 = heap_caps_malloc(buffer_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        if (s_lvgl_buf1 == NULL)
+        {
+            ESP_LOGE(TAG, "Failed to allocate internal DMA LVGL buffer");
+            return ESP_ERR_NO_MEM;
+        }
+        ESP_LOGW(TAG, "Using smaller LVGL DMA buffer (%u lines)", (unsigned int)buffer_lines);
     }
 
-    lv_display_set_buffers(s_lvgl_display, s_lvgl_buf1, s_lvgl_buf2, buffer_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_buffers(s_lvgl_display, s_lvgl_buf1, NULL, buffer_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
-    ESP_LOGI(TAG, "LVGL display initialized (%dx%d)", LCD_WIDTH, LCD_HEIGHT);
+    ESP_LOGI(TAG, "LVGL display initialized (%dx%d, SPI mode 3 at 80 MHz, internal DMA buffer=%u lines)",
+        LCD_WIDTH, LCD_HEIGHT, (unsigned int)buffer_lines);
 
     return ESP_OK;
 }

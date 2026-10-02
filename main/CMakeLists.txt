@@ -27,4 +27,5 @@ idf_component_register(
         "web/app.js"
         "web/home.html"
         "web/home.js"
+        "web/gif-resize.js"
 )

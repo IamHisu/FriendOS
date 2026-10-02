@@ -28,6 +28,8 @@ extern const char home_html_start[] asm("_binary_home_html_start");
 extern const char home_html_end[] asm("_binary_home_html_end");
 extern const char home_js_start[] asm("_binary_home_js_start");
 extern const char home_js_end[] asm("_binary_home_js_end");
+extern const char gif_resize_js_start[] asm("_binary_gif_resize_js_start");
+extern const char gif_resize_js_end[] asm("_binary_gif_resize_js_end");
 
 static esp_err_t root_handler(httpd_req_t *req);
 static esp_err_t style_css_handler(httpd_req_t *req);
@@ -36,6 +38,7 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req);
 static esp_err_t wifi_connect_handler(httpd_req_t *req);
 static esp_err_t wifi_forget_handler(httpd_req_t *req);
 static esp_err_t home_js_handler(httpd_req_t *req);
+static esp_err_t gif_resize_js_handler(httpd_req_t *req);
 static esp_err_t status_handler(httpd_req_t *req);
 static esp_err_t media_upload_handler(httpd_req_t *req);
 static esp_err_t media_face_handler(httpd_req_t *req);
@@ -210,6 +213,14 @@ static esp_err_t home_js_handler(httpd_req_t *req)
     if (length > 0 && home_js_start[length - 1] == '\0') length--;
     httpd_resp_set_type(req, "application/javascript; charset=utf-8");
     return httpd_resp_send(req, home_js_start, length);
+}
+
+static esp_err_t gif_resize_js_handler(httpd_req_t *req)
+{
+    size_t length = gif_resize_js_end - gif_resize_js_start;
+    if (length > 0 && gif_resize_js_start[length - 1] == '\0') length--;
+    httpd_resp_set_type(req, "application/javascript; charset=utf-8");
+    return httpd_resp_send(req, gif_resize_js_start, length);
 }
 
 static esp_err_t status_handler(httpd_req_t *req)
@@ -516,7 +527,7 @@ esp_err_t friend_http_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 13;
 
     ESP_LOGI(TAG, "Starting HTTP server with stack=%u", config.stack_size);
 
@@ -574,6 +585,9 @@ esp_err_t friend_http_start(void)
     const httpd_uri_t home_js_uri = {
         .uri = "/home.js", .method = HTTP_GET, .handler = home_js_handler,
     };
+    const httpd_uri_t gif_resize_js_uri = {
+        .uri = "/gif-resize.js", .method = HTTP_GET, .handler = gif_resize_js_handler,
+    };
     const httpd_uri_t status_uri = {
         .uri = "/api/status", .method = HTTP_GET, .handler = status_handler,
     };
@@ -594,6 +608,7 @@ esp_err_t friend_http_start(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &wifi_connect_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &wifi_forget_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &home_js_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &gif_resize_js_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &status_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &still_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &gif_uri));

@@ -83,7 +83,8 @@ async function connectWifi(ssid, password) {
         const result = await response.json();
 
         if (result.success) {
-            status.textContent = "Đã kết nối Wi-Fi. Mộc đang chuyển sang Home.";
+            status.style.display = "none";
+            document.getElementById("subtitle").textContent = "Mộc đã kết nối Wi-Fi";
             document.getElementById("passwordPanel").classList.add("hidden");
             document.getElementById("networks").classList.add("hidden");
             document.getElementById("refreshButton").classList.add("hidden");
@@ -141,6 +142,8 @@ async function scanWifi() {
     busy = true;
     const status = document.getElementById("status");
     const list = document.getElementById("networks");
+    document.getElementById("passwordPanel").classList.add("hidden");
+    selectedSsid = "";
 
     status.style.display = "block";
     status.textContent = "Đang quét Wi-Fi...";

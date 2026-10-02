@@ -1,23 +1,55 @@
 const connection = document.getElementById("connection");
 const displayState = document.getElementById("displayState");
 const uploadStatus = document.getElementById("uploadStatus");
+const gifNotice = document.getElementById("gifNotice");
 const picker = document.getElementById("imageFile");
+const pickerLabel = picker.closest(".file-picker");
 const preview = document.getElementById("preview");
+const screenEmpty = document.getElementById("screenEmpty");
 const faceButton = document.getElementById("showFace");
 let previewUrl = null;
 let busy = false;
+let refreshing = false;
+let currentDisplay = "face";
+
+function setMessage(text, kind) {
+    uploadStatus.textContent = text;
+    uploadStatus.className = kind || "";
+}
+
+function renderScreen() {
+    const showLocal = previewUrl && currentDisplay !== "face";
+    preview.classList.toggle("hidden", !showLocal);
+    screenEmpty.classList.toggle("hidden", showLocal);
+    screenEmpty.textContent = currentDisplay === "face" ? "Đang hiện mặt Mộc"
+        : currentDisplay === "gif" ? "Đang phát GIF trên Mộc" : "Đang hiện ảnh trên Mộc";
+}
+
+function setBusy(value) {
+    busy = value;
+    picker.disabled = faceButton.disabled = value;
+    pickerLabel.classList.toggle("disabled", value);
+}
 
 async function refreshStatus() {
+    if (refreshing || busy) return;
+    refreshing = true;
     try {
-        const response = await fetch("/api/status", { cache: "no-store" });
+        const response = await fetch("/api/status", { cache: "no-store", signal: AbortSignal.timeout(4000) });
         if (!response.ok) throw new Error("status");
         const status = await response.json();
         connection.textContent = status.online ? status.ip : "Đã ngắt Wi-Fi";
-        displayState.textContent = status.display === "gif" ? "Đang phát GIF" :
-            status.display === "image" ? "Đang hiện ảnh" : "Đang hiện mặt Mộc";
-        if (!status.gifAvailable) uploadStatus.textContent = "GIF tạm không khả dụng do thiếu bộ nhớ.";
+        connection.className = status.online ? "online" : "offline";
+        currentDisplay = status.display === "gif" || status.display === "image" ? status.display : "face";
+        displayState.textContent = currentDisplay === "gif" ? "Đang phát GIF" :
+            currentDisplay === "image" ? "Đang hiện ảnh" : "Đang hiện mặt Mộc";
+        gifNotice.textContent = status.gifAvailable ? "" : "GIF tạm không khả dụng do thiếu bộ nhớ.";
+        renderScreen();
     } catch (_) {
         connection.textContent = "Không kết nối được";
+        connection.className = "offline";
+    } finally {
+        refreshing = false;
     }
 }
 
@@ -51,45 +83,55 @@ function loadImage(url) {
     });
 }
 
+function clearPreview() {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = null;
+    preview.removeAttribute("src");
+}
+
 async function upload(file) {
     if (busy) return;
     const gif = /\.gif$/i.test(file.name) || file.type === "image/gif";
     const still = /\.(jpe?g|png)$/i.test(file.name) || file.type === "image/jpeg" || file.type === "image/png";
     if (!gif && !still) {
-        uploadStatus.textContent = "Chỉ nhận JPG, PNG hoặc GIF.";
+        setMessage("Chỉ nhận JPG, PNG hoặc GIF.", "error");
         return;
     }
-    if (gif && file.size > 1024 * 1024) {
-        uploadStatus.textContent = "GIF phải nhỏ hơn 1 MB.";
+    const sourceLimit = GifResize.supported ? 10 * GifResize.MAX_BYTES : GifResize.MAX_BYTES;
+    if (gif && file.size > sourceLimit) {
+        setMessage("GIF tối đa " + sourceLimit / GifResize.MAX_BYTES + " MB.", "error");
         return;
     }
 
-    busy = true;
-    picker.disabled = faceButton.disabled = true;
-    uploadStatus.textContent = "Đang chuẩn bị ảnh...";
+    setBusy(true);
+    setMessage("Đang chuẩn bị ảnh...");
     try {
-        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        clearPreview();
         previewUrl = URL.createObjectURL(file);
         preview.src = previewUrl;
-        preview.classList.remove("hidden");
         const image = await loadImage(previewUrl);
-        if (gif && (image.naturalWidth > 240 || image.naturalHeight > 240)) {
-            throw new Error("GIF phải có kích thước tối đa 240×240.");
-        }
-
-        const body = gif ? file : imageBytes(image);
-        uploadStatus.textContent = "Đang gửi tới Mộc...";
+        let body;
+        if (!gif) body = imageBytes(image);
+        else if (image.naturalWidth <= 240 && image.naturalHeight <= 240 && file.size <= GifResize.MAX_BYTES) body = file;
+        else if (!GifResize.supported) throw new Error("Trình duyệt này không tự thu nhỏ được GIF. Hãy dùng GIF tối đa 240×240 và 1 MB.");
+        else body = await GifResize.resize(file, image, setMessage);
+        setMessage("Đang gửi tới Mộc...");
         const response = await fetch(gif ? "/api/media/gif" : "/api/media/still", {
             method: "POST", headers: { "Content-Type": "application/octet-stream" }, body,
         });
-        if (!response.ok) throw new Error("Tải ảnh thất bại (HTTP " + response.status + ").");
-        uploadStatus.textContent = "Đã gửi ảnh tới màn hình.";
+        if (!response.ok) throw new Error(response.status === 503
+            ? "Mộc đang bận hoặc thiếu bộ nhớ. Thử lại sau vài giây."
+            : "Tải ảnh thất bại (HTTP " + response.status + ").");
+        currentDisplay = gif ? "gif" : "image";
+        renderScreen();
+        setMessage("Đã gửi ảnh tới màn hình.", "ok");
         setTimeout(refreshStatus, 500);
     } catch (error) {
-        uploadStatus.textContent = error.message;
+        clearPreview();
+        renderScreen();
+        setMessage(error.message, "error");
     } finally {
-        busy = false;
-        picker.disabled = faceButton.disabled = false;
+        setBusy(false);
     }
 }
 
@@ -101,18 +143,19 @@ picker.addEventListener("change", () => {
 
 faceButton.addEventListener("click", async () => {
     if (busy) return;
-    busy = true;
-    faceButton.disabled = true;
+    setBusy(true);
     try {
         const response = await fetch("/api/media/face", { method: "POST" });
         if (!response.ok) throw new Error("Không chuyển được màn hình.");
-        uploadStatus.textContent = "Đã trở lại mặt Mộc.";
+        clearPreview();
+        currentDisplay = "face";
+        renderScreen();
+        setMessage("Đã trở lại mặt Mộc.", "ok");
         setTimeout(refreshStatus, 500);
     } catch (error) {
-        uploadStatus.textContent = error.message;
+        setMessage(error.message, "error");
     } finally {
-        busy = false;
-        faceButton.disabled = false;
+        setBusy(false);
     }
 });
 
