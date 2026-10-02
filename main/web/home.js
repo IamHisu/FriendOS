@@ -97,9 +97,9 @@ async function upload(file) {
         setMessage("Chỉ nhận JPG, PNG hoặc GIF.", "error");
         return;
     }
-    const sourceLimit = GifResize.supported ? 10 * GifResize.MAX_BYTES : GifResize.MAX_BYTES;
+    const sourceLimit = 8 * 1024 * 1024;
     if (gif && file.size > sourceLimit) {
-        setMessage("GIF tối đa " + sourceLimit / GifResize.MAX_BYTES + " MB.", "error");
+        setMessage("GIF gốc tối đa 8 MB.", "error");
         return;
     }
 
@@ -112,9 +112,17 @@ async function upload(file) {
         const image = await loadImage(previewUrl);
         let body;
         if (!gif) body = imageBytes(image);
-        else if (image.naturalWidth <= 240 && image.naturalHeight <= 240 && file.size <= GifResize.MAX_BYTES) body = file;
-        else if (!GifResize.supported) throw new Error("Trình duyệt này không tự thu nhỏ được GIF. Hãy dùng GIF tối đa 240×240 và 1 MB.");
-        else body = await GifResize.resize(file, image, setMessage);
+        else {
+            if (typeof FriendGifResize === "undefined") throw new Error("Không tải được bộ xử lý GIF. Hãy mở lại trang.");
+            body = await FriendGifResize.resizeGif(file, (done, total) => {
+                setMessage(`Đang xử lý GIF: ${done}/${total} frame...`);
+            });
+            if (body !== file) {
+                URL.revokeObjectURL(previewUrl);
+                previewUrl = URL.createObjectURL(body);
+                preview.src = previewUrl;
+            }
+        }
         setMessage("Đang gửi tới Mộc...");
         const response = await fetch(gif ? "/api/media/gif" : "/api/media/still", {
             method: "POST", headers: { "Content-Type": "application/octet-stream" }, body,
@@ -124,7 +132,8 @@ async function upload(file) {
             : "Tải ảnh thất bại (HTTP " + response.status + ").");
         currentDisplay = gif ? "gif" : "image";
         renderScreen();
-        setMessage("Đã gửi ảnh tới màn hình.", "ok");
+        setMessage(gif && body !== file ? `Đã gửi GIF chuẩn hóa (${Math.round(body.size / 1024)} KB).`
+            : "Đã gửi ảnh tới màn hình.", "ok");
         setTimeout(refreshStatus, 500);
     } catch (error) {
         clearPreview();

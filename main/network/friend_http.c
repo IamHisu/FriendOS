@@ -204,6 +204,7 @@ static esp_err_t root_handler(httpd_req_t *req)
     }
 
     httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, start, length);
 }
 
@@ -212,6 +213,7 @@ static esp_err_t home_js_handler(httpd_req_t *req)
     size_t length = home_js_end - home_js_start;
     if (length > 0 && home_js_start[length - 1] == '\0') length--;
     httpd_resp_set_type(req, "application/javascript; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, home_js_start, length);
 }
 
@@ -220,6 +222,7 @@ static esp_err_t gif_resize_js_handler(httpd_req_t *req)
     size_t length = gif_resize_js_end - gif_resize_js_start;
     if (length > 0 && gif_resize_js_start[length - 1] == '\0') length--;
     httpd_resp_set_type(req, "application/javascript; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, gif_resize_js_start, length);
 }
 
@@ -290,6 +293,7 @@ static esp_err_t media_upload_handler(httpd_req_t *req)
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "GIF must be valid and at most 240x240");
             return ESP_FAIL;
         }
+        ESP_LOGI(TAG, "GIF upload: %u bytes, %ux%u", (unsigned int)received, width, height);
     }
 
     esp_err_t ret = friend_media_submit(gif ? FRIEND_MEDIA_GIF : FRIEND_MEDIA_STILL, data, received);

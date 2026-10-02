@@ -15,17 +15,13 @@ function canvas(width, height) {
     return { element, context };
 }
 
-function restorePrevious(context, previous, background) {
+function restorePrevious(context, previous) {
     if (!previous) return;
     if (previous.disposalType === 3 && previous.snapshot) {
         context.putImageData(previous.snapshot, 0, 0);
     } else if (previous.disposalType === 2) {
         const { left, top, width, height } = previous.dims;
         context.clearRect(left, top, width, height);
-        if (background && previous.transparentIndex !== previous.backgroundIndex) {
-            context.fillStyle = background;
-            context.fillRect(left, top, width, height);
-        }
     }
 }
 
@@ -34,9 +30,6 @@ async function encodeAtSize(gif, frames, width, height, repeat, notify) {
     const patch = canvas(1, 1);
     const output = canvas(width, height);
     const encoder = GIFEncoder();
-    const backgroundIndex = gif.lsd.backgroundColorIndex;
-    const rgb = gif.gct?.[backgroundIndex];
-    const background = rgb ? `rgb(${rgb[0]},${rgb[1]},${rgb[2]})` : null;
     let previous = null;
 
     for (let i = 0; i < frames.length; i++) {
@@ -44,11 +37,7 @@ async function encodeAtSize(gif, frames, width, height, repeat, notify) {
         if (!frame || !frame.patch || frame.dims.width < 1 || frame.dims.height < 1) {
             throw new Error("Không giải mã được một frame GIF.");
         }
-        if (i === 0 && background && frame.transparentIndex !== backgroundIndex) {
-            source.context.fillStyle = background;
-            source.context.fillRect(0, 0, source.element.width, source.element.height);
-        }
-        restorePrevious(source.context, previous, background);
+        restorePrevious(source.context, previous);
 
         const snapshot = frame.disposalType === 3
             ? source.context.getImageData(0, 0, source.element.width, source.element.height) : null;
@@ -69,7 +58,7 @@ async function encodeAtSize(gif, frames, width, height, repeat, notify) {
             repeat,
             dispose: 1,
         });
-        previous = { ...frame, snapshot, backgroundIndex };
+        previous = { ...frame, snapshot };
 
         if (i % 4 === 3) {
             notify?.(i + 1, frames.length);
@@ -95,11 +84,15 @@ export async function resizeGif(file, notify) {
     if (!width || !height || width * height > MAX_SOURCE_PIXELS) {
         throw new Error("GIF quá lớn để xử lý trên trình duyệt này.");
     }
-    if (width <= 240 && height <= 240 && file.size <= MAX_OUTPUT_BYTES) return file;
-
     const frames = gif.frames.filter(frame => frame.image);
     if (!frames.length || frames.length > MAX_FRAMES) {
         throw new Error("GIF cần có từ 1 đến 180 frame.");
+    }
+    const needsCompositing = frames.length > 1 && frames.some(frame =>
+        frame.gce?.extras.disposal === 2 || frame.gce?.extras.disposal === 3 ||
+        frame.gce?.extras.transparentColorGiven);
+    if (width <= 240 && height <= 240 && file.size <= MAX_OUTPUT_BYTES && !needsCompositing) {
+        return file;
     }
     const loop = gif.frames.find(frame => frame.application?.id === "NETSCAPE2.0")?.application.blocks;
     const repeat = loop?.[0] === 1 ? loop[1] | (loop[2] << 8) : -1;
