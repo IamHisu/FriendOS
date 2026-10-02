@@ -1427,9 +1427,9 @@ After this passes, make a checkpoint before moving to the next FriendOS subsyste
 
 ## 28. Persistent display media (2026-10-02)
 
-The selected display mode (Moc face, RGB565 still image, or GIF) is now restored after a power cycle. Upload/face-selection requests write flash only on selection; GIF playback never writes flash. The media store uses two alternating slots with payload and header checksums, so an interrupted write leaves the previous selection available. On boot, a corrupt latest slot falls back to the older valid slot, then to the Moc face if neither is usable.
+The last uploaded RGB565 still image or GIF is kept in the media partition; whether the display currently shows that media or the Moc face is kept separately in NVS (`friend_media/show_image`). A short BOOT click switches between them without rewriting the image. If no saved image exists, a brief notice appears on the TFT. The 5-second BOOT hold still enters Manual Wi-Fi Setup. GIF playback never writes flash. The media store uses two alternating slots with payload and header checksums, so an interrupted media write can fall back to the older valid image. On boot, unavailable saved media falls back to the Moc face.
 
 `partitions.csv` preserves the prior NVS and two OTA offsets/sizes and adds a 0x220000-byte `media` data partition at 0x380000 on the 16 MB flash. The first installation of this feature must flash the partition table as well as the app (`idf.py flash`), not only `FriendOS.bin` or an OTA app update. Existing Wi-Fi credentials remain in the unchanged NVS partition. The old note in section 16 about *not* changing the partition table applied to the earlier Wi-Fi work and is now superseded.
 
-Source: `main/ui/friend_media_store.c`; boot restore: `main/main.c`; save/commit: `main/network/friend_http.c`. Hardware power-cycle validation is still needed.
+Source: `main/ui/friend_media_store.c`; boot restore: `main/main.c`; button/UI switching: `main/board/board_buttons.c` and `main/ui/friend_media.c`; web save/selection: `main/network/friend_http.c`. Hardware button and power-cycle validation is still needed.
 

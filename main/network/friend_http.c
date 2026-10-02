@@ -322,6 +322,13 @@ static esp_err_t media_upload_handler(httpd_req_t *req)
         httpd_resp_set_status(req, "507 Insufficient Storage");
         return httpd_resp_sendstr(req, "Media displayed but not saved");
     }
+    ret = friend_media_store_set_image_visible(true);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Media saved but display mode not saved: %s", esp_err_to_name(ret));
+        httpd_resp_set_status(req, "507 Insufficient Storage");
+        return httpd_resp_sendstr(req, "Media saved but display mode not saved");
+    }
 
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, "{\"queued\":true}");
@@ -334,23 +341,15 @@ static esp_err_t media_face_handler(httpd_req_t *req)
         httpd_resp_set_status(req, "503 Service Unavailable");
         return httpd_resp_sendstr(req, "Home is not online");
     }
-    esp_err_t ret = friend_media_store_prepare(FRIEND_MEDIA_FACE, NULL, 0);
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Could not save face selection: %s", esp_err_to_name(ret));
-        httpd_resp_set_status(req, "507 Insufficient Storage");
-        return httpd_resp_sendstr(req, "Face selection could not be saved");
-    }
     if (friend_media_submit(FRIEND_MEDIA_FACE, NULL, 0) != ESP_OK)
     {
-        friend_media_store_abort();
         httpd_resp_set_status(req, "503 Service Unavailable");
         return httpd_resp_sendstr(req, "Display is busy");
     }
-    ret = friend_media_store_commit();
+    esp_err_t ret = friend_media_store_set_image_visible(false);
     if (ret != ESP_OK)
     {
-        ESP_LOGE(TAG, "Face displayed but save commit failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Face displayed but display mode was not saved: %s", esp_err_to_name(ret));
         httpd_resp_set_status(req, "507 Insufficient Storage");
         return httpd_resp_sendstr(req, "Face displayed but not saved");
     }

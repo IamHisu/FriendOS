@@ -1,5 +1,6 @@
 #include "friend_media.h"
 #include "friend_gif.h"
+#include "friend_media_store.h"
 
 #include <stdlib.h>
 
@@ -25,6 +26,36 @@ static lv_obj_t *media_backdrop;
 static uint8_t *media_data;
 static lv_image_dsc_t *media_descriptor;
 static volatile friend_media_kind_t current_kind = FRIEND_MEDIA_FACE;
+static lv_obj_t *media_notice;
+
+#define FRIEND_MEDIA_TOGGLE ((friend_media_kind_t)3)
+
+static void notice_deleted(lv_event_t *event)
+{
+    (void)event;
+    media_notice = NULL;
+}
+
+static void show_notice(const char *message)
+{
+    if (media_notice != NULL) lv_obj_delete(media_notice);
+    media_notice = lv_obj_create(lv_layer_top());
+    if (media_notice == NULL) return;
+    lv_obj_set_size(media_notice, 220, 42);
+    lv_obj_align(media_notice, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_obj_set_style_bg_color(media_notice, lv_color_hex(0x202020), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(media_notice, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(media_notice, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(media_notice, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(media_notice, 4, LV_PART_MAIN);
+    lv_obj_remove_flag(media_notice, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *label = lv_label_create(media_notice);
+    lv_label_set_text(label, message);
+    lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_center(label);
+    lv_obj_add_event_cb(media_notice, notice_deleted, LV_EVENT_DELETE, NULL);
+    lv_obj_delete_delayed(media_notice, 2200);
+}
 
 esp_err_t friend_media_init(void)
 {
@@ -66,6 +97,14 @@ bool friend_media_gif_available(void)
     return gif_ready;
 }
 
+void friend_media_toggle(void)
+{
+    if (command_queue == NULL) return;
+    media_command_t command = { .kind = FRIEND_MEDIA_TOGGLE };
+    if (xQueueSend(command_queue, &command, 0) != pdTRUE)
+        ESP_LOGW(TAG, "BOOT media toggle ignored: display busy");
+}
+
 const char *friend_media_current(void)
 {
     switch (current_kind)
@@ -81,6 +120,28 @@ void friend_media_process(void)
     media_command_t command;
     if (command_queue == NULL || xQueueReceive(command_queue, &command, 0) != pdTRUE) return;
 
+    bool toggle = command.kind == FRIEND_MEDIA_TOGGLE;
+    if (toggle && current_kind == FRIEND_MEDIA_FACE)
+    {
+        esp_err_t err = friend_media_store_load_image(&command.kind, &command.data, &command.size);
+        if (err != ESP_OK)
+        {
+            ESP_LOGW(TAG, "No saved media for BOOT toggle: %s", esp_err_to_name(err));
+            show_notice(err == ESP_ERR_NOT_FOUND ? "Chua co anh/GIF da luu" : "Khong mo duoc anh da luu");
+            return;
+        }
+        if (command.kind == FRIEND_MEDIA_GIF && !gif_ready)
+        {
+            free(command.data);
+            show_notice("Khong du bo nho cho GIF");
+            return;
+        }
+    }
+    else if (toggle)
+    {
+        command.kind = FRIEND_MEDIA_FACE;
+    }
+
     if (command.kind == FRIEND_MEDIA_FACE)
     {
         if (media_backdrop != NULL) lv_obj_delete(media_backdrop);
@@ -91,6 +152,11 @@ void friend_media_process(void)
         free(media_descriptor);
         media_descriptor = NULL;
         current_kind = FRIEND_MEDIA_FACE;
+        if (toggle)
+        {
+            esp_err_t err = friend_media_store_set_image_visible(false);
+            if (err != ESP_OK) ESP_LOGW(TAG, "Could not save face mode: %s", esp_err_to_name(err));
+        }
         return;
     }
 
@@ -163,4 +229,9 @@ void friend_media_process(void)
     lv_obj_remove_flag(media_object, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(media_backdrop, LV_OBJ_FLAG_HIDDEN);
     current_kind = command.kind;
+    if (toggle)
+    {
+        esp_err_t err = friend_media_store_set_image_visible(true);
+        if (err != ESP_OK) ESP_LOGW(TAG, "Could not save image mode: %s", esp_err_to_name(err));
+    }
 }

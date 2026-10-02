@@ -6,6 +6,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "nvs.h"
 
 #include "lvgl.h"
 
@@ -95,31 +96,38 @@ void app_main(void)
     ESP_ERROR_CHECK(friend_ui_init());
     esp_err_t media_ret = friend_media_init();
     if (media_ret != ESP_OK) ESP_LOGW(TAG, "Media unavailable: %s", esp_err_to_name(media_ret));
-    friend_media_kind_t saved_kind;
-    uint8_t *saved_data = NULL;
-    size_t saved_size = 0;
-    esp_err_t restore_ret = friend_media_store_load(&saved_kind, &saved_data, &saved_size);
-    if (restore_ret == ESP_OK && saved_kind != FRIEND_MEDIA_FACE)
-    {
-        if (friend_media_submit(saved_kind, saved_data, saved_size) != ESP_OK)
-        {
-            ESP_LOGW(TAG, "Could not display saved media");
-            free(saved_data);
-        }
-        else friend_media_process();
-    }
-    else if (restore_ret != ESP_OK && restore_ret != ESP_ERR_NOT_FOUND)
-    {
-        ESP_LOGW(TAG, "Could not restore media: %s", esp_err_to_name(restore_ret));
-    }
     ESP_ERROR_CHECK(board_buttons_init());
     ESP_ERROR_CHECK(board_audio_init());
 
     ESP_ERROR_CHECK(friend_wifi_init());
     ESP_ERROR_CHECK(friend_wifi_store_init());
+    friend_media_kind_t saved_kind = FRIEND_MEDIA_FACE;
+    uint8_t *saved_data = NULL;
+    size_t saved_size = 0;
+    esp_err_t restore_ret = friend_media_store_load(&saved_kind, &saved_data, &saved_size);
+    bool show_image = restore_ret == ESP_OK && saved_kind != FRIEND_MEDIA_FACE;
+    esp_err_t mode_ret = friend_media_store_get_image_visible(&show_image);
+    if (mode_ret != ESP_OK && mode_ret != ESP_ERR_NVS_NOT_FOUND)
+        ESP_LOGW(TAG, "Could not read display mode: %s", esp_err_to_name(mode_ret));
+    if (show_image && (restore_ret != ESP_OK || saved_kind == FRIEND_MEDIA_FACE))
+    {
+        free(saved_data);
+        restore_ret = friend_media_store_load_image(&saved_kind, &saved_data, &saved_size);
+    }
+    if (show_image && restore_ret == ESP_OK && saved_kind != FRIEND_MEDIA_FACE)
+    {
+        if (friend_media_submit(saved_kind, saved_data, saved_size) == ESP_OK)
+            friend_media_process();
+        else
+            free(saved_data);
+    }
+    else free(saved_data);
+    if (restore_ret != ESP_OK && restore_ret != ESP_ERR_NOT_FOUND)
+        ESP_LOGW(TAG, "Could not restore media: %s", esp_err_to_name(restore_ret));
     ESP_ERROR_CHECK(friend_wifi_manager_start());
 
     board_buttons_set_boot_long_press_callback(friend_wifi_request_manual_mode);
+    board_buttons_set_boot_click_callback(friend_media_toggle);
 
     friend_ui_set_idle_actions(true);
 

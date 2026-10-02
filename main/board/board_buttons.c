@@ -13,12 +13,17 @@ static button_handle_t s_btn_vol_up = NULL;
 static button_handle_t s_btn_vol_down = NULL;
 
 static board_button_callback_t s_boot_long_press_callback = NULL;
+static board_button_callback_t s_boot_click_callback = NULL;
 
 static void button_single_click_cb(void *button_handle, void *usr_data)
 {
     const char *name = (const char *)usr_data;
 
     ESP_LOGI(TAG, "%s SINGLE_CLICK", name);
+    if (button_handle == s_btn_boot && s_boot_click_callback != NULL)
+    {
+        s_boot_click_callback();
+    }
 }
 
 static void button_long_press_cb(void *button_handle, void *usr_data)
@@ -109,4 +114,9 @@ esp_err_t board_buttons_init(void)
 void board_buttons_set_boot_long_press_callback(board_button_callback_t callback)
 {
     s_boot_long_press_callback = callback;
+}
+
+void board_buttons_set_boot_click_callback(board_button_callback_t callback)
+{
+    s_boot_click_callback = callback;
 }

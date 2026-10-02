@@ -23,3 +23,4 @@ esp_err_t friend_media_submit(friend_media_kind_t kind, uint8_t *data, size_t si
 void friend_media_process(void);
 const char *friend_media_current(void);
 bool friend_media_gif_available(void);
+void friend_media_toggle(void);

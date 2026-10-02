@@ -6,6 +6,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_partition.h"
+#include "nvs.h"
 
 #define STORE_MAGIC 0x4d4f4331u
 #define STORE_VERSION 1u
@@ -27,6 +28,7 @@ static const char *TAG = "MEDIA_STORE";
 static const esp_partition_t *partition;
 static int active_slot = -1;
 static uint32_t active_sequence;
+static friend_media_kind_t active_kind = FRIEND_MEDIA_FACE;
 static int pending_slot = -1;
 static media_header_t pending_header;
 
@@ -104,6 +106,7 @@ esp_err_t friend_media_store_load(friend_media_kind_t *kind, uint8_t **data, siz
         }
         active_slot = slot;
         active_sequence = headers[slot].sequence;
+        active_kind = (friend_media_kind_t)headers[slot].kind;
         *kind = (friend_media_kind_t)headers[slot].kind;
         *size = headers[slot].size;
         ESP_LOGI(TAG, "Restored %s from slot %d (%u bytes)",
@@ -112,6 +115,64 @@ esp_err_t friend_media_store_load(friend_media_kind_t *kind, uint8_t **data, siz
         return ESP_OK;
     }
     return ESP_ERR_NOT_FOUND;
+}
+
+esp_err_t friend_media_store_load_image(friend_media_kind_t *kind, uint8_t **data, size_t *size)
+{
+    if (kind == NULL || data == NULL || size == NULL) return ESP_ERR_INVALID_ARG;
+    *data = NULL;
+    *size = 0;
+    esp_err_t err = find_partition();
+    if (err != ESP_OK) return err;
+
+    media_header_t headers[2];
+    bool valid[2];
+    for (int slot = 0; slot < 2; slot++)
+    {
+        err = esp_partition_read(partition, slot * SLOT_SIZE, &headers[slot], sizeof(headers[slot]));
+        valid[slot] = err == ESP_OK && header_valid(&headers[slot]) &&
+                      headers[slot].kind != FRIEND_MEDIA_FACE;
+    }
+    int first = valid[0] ? 0 : 1;
+    if (valid[0] && valid[1] && (int32_t)(headers[1].sequence - headers[0].sequence) > 0)
+        first = 1;
+
+    for (int attempt = 0; attempt < 2; attempt++)
+    {
+        int slot = attempt == 0 ? first : 1 - first;
+        if (!valid[slot]) continue;
+        err = read_slot(slot, &headers[slot], data);
+        if (err == ESP_ERR_NO_MEM) return err;
+        if (err != ESP_OK) continue;
+        *kind = (friend_media_kind_t)headers[slot].kind;
+        *size = headers[slot].size;
+        return ESP_OK;
+    }
+    return ESP_ERR_NOT_FOUND;
+}
+
+esp_err_t friend_media_store_get_image_visible(bool *visible)
+{
+    if (visible == NULL) return ESP_ERR_INVALID_ARG;
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open("friend_media", NVS_READONLY, &handle);
+    if (err != ESP_OK) return err;
+    uint8_t value;
+    err = nvs_get_u8(handle, "show_image", &value);
+    nvs_close(handle);
+    if (err == ESP_OK) *visible = value != 0;
+    return err;
+}
+
+esp_err_t friend_media_store_set_image_visible(bool visible)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open("friend_media", NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+    err = nvs_set_u8(handle, "show_image", visible ? 1 : 0);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+    return err;
 }
 
 esp_err_t friend_media_store_prepare(friend_media_kind_t kind, const uint8_t *data, size_t size)
@@ -125,7 +186,8 @@ esp_err_t friend_media_store_prepare(friend_media_kind_t kind, const uint8_t *da
     esp_err_t err = find_partition();
     if (err != ESP_OK) return err;
 
-    int slot = active_slot == 0 ? 1 : 0;
+    int slot = active_slot >= 0 && active_kind == FRIEND_MEDIA_FACE
+        ? active_slot : active_slot == 0 ? 1 : 0;
     size_t erase_size = DATA_OFFSET + ((size + DATA_OFFSET - 1) & ~(DATA_OFFSET - 1));
     err = esp_partition_erase_range(partition, slot * SLOT_SIZE, erase_size);
     if (err == ESP_OK && size != 0)
@@ -165,6 +227,7 @@ esp_err_t friend_media_store_commit(void)
     {
         active_slot = slot;
         active_sequence = pending_header.sequence;
+        active_kind = (friend_media_kind_t)pending_header.kind;
     }
     return err;
 }
