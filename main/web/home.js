@@ -129,6 +129,7 @@ async function upload(file) {
         });
         if (!response.ok) throw new Error(response.status === 503
             ? "Mộc đang bận hoặc thiếu bộ nhớ. Thử lại sau vài giây."
+            : response.status === 507 ? "Không lưu được ảnh vào bộ nhớ flash của Mộc."
             : "Tải ảnh thất bại (HTTP " + response.status + ").");
         currentDisplay = gif ? "gif" : "image";
         renderScreen();
@@ -155,7 +156,9 @@ faceButton.addEventListener("click", async () => {
     setBusy(true);
     try {
         const response = await fetch("/api/media/face", { method: "POST" });
-        if (!response.ok) throw new Error("Không chuyển được màn hình.");
+        if (!response.ok) throw new Error(response.status === 507
+            ? "Không lưu được lựa chọn mặt Mộc vào flash."
+            : "Không chuyển được màn hình.");
         clearPreview();
         currentDisplay = "face";
         renderScreen();

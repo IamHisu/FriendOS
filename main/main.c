@@ -1,5 +1,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_err.h"
@@ -13,6 +14,7 @@
 #include "board/board_audio.h"
 #include "ui/friend_ui.h"
 #include "ui/friend_media.h"
+#include "ui/friend_media_store.h"
 #include "network/friend_wifi.h"
 #include "network/friend_wifi_store.h"
 
@@ -93,6 +95,23 @@ void app_main(void)
     ESP_ERROR_CHECK(friend_ui_init());
     esp_err_t media_ret = friend_media_init();
     if (media_ret != ESP_OK) ESP_LOGW(TAG, "Media unavailable: %s", esp_err_to_name(media_ret));
+    friend_media_kind_t saved_kind;
+    uint8_t *saved_data = NULL;
+    size_t saved_size = 0;
+    esp_err_t restore_ret = friend_media_store_load(&saved_kind, &saved_data, &saved_size);
+    if (restore_ret == ESP_OK && saved_kind != FRIEND_MEDIA_FACE)
+    {
+        if (friend_media_submit(saved_kind, saved_data, saved_size) != ESP_OK)
+        {
+            ESP_LOGW(TAG, "Could not display saved media");
+            free(saved_data);
+        }
+        else friend_media_process();
+    }
+    else if (restore_ret != ESP_OK && restore_ret != ESP_ERR_NOT_FOUND)
+    {
+        ESP_LOGW(TAG, "Could not restore media: %s", esp_err_to_name(restore_ret));
+    }
     ESP_ERROR_CHECK(board_buttons_init());
     ESP_ERROR_CHECK(board_audio_init());
 

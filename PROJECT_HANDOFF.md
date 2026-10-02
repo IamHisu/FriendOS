@@ -1425,3 +1425,11 @@ Manual Wi-Fi Setup UX/API
 
 After this passes, make a checkpoint before moving to the next FriendOS subsystem.
 
+## 28. Persistent display media (2026-10-02)
+
+The selected display mode (Moc face, RGB565 still image, or GIF) is now restored after a power cycle. Upload/face-selection requests write flash only on selection; GIF playback never writes flash. The media store uses two alternating slots with payload and header checksums, so an interrupted write leaves the previous selection available. On boot, a corrupt latest slot falls back to the older valid slot, then to the Moc face if neither is usable.
+
+`partitions.csv` preserves the prior NVS and two OTA offsets/sizes and adds a 0x220000-byte `media` data partition at 0x380000 on the 16 MB flash. The first installation of this feature must flash the partition table as well as the app (`idf.py flash`), not only `FriendOS.bin` or an OTA app update. Existing Wi-Fi credentials remain in the unchanged NVS partition. The old note in section 16 about *not* changing the partition table applied to the earlier Wi-Fi work and is now superseded.
+
+Source: `main/ui/friend_media_store.c`; boot restore: `main/main.c`; save/commit: `main/network/friend_http.c`. Hardware power-cycle validation is still needed.
+

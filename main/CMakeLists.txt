@@ -6,6 +6,7 @@ idf_component_register(
         "board/board_audio.c"
         "ui/friend_ui.c"
         "ui/friend_media.c"
+        "ui/friend_media_store.c"
         "ui/friend_gif.c"
         "network/friend_wifi.c"
         "network/friend_http.c"
@@ -21,6 +22,7 @@ idf_component_register(
         esp_driver_i2s
         esp_lcd
         esp_timer
+        esp_partition
     EMBED_TXTFILES
         "web/index.html"
         "web/style.css"
