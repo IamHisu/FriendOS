@@ -11,6 +11,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_netif_sntp.h"
 #include "esp_wifi.h"
 
 #include "nvs_flash.h"
@@ -70,6 +71,9 @@ esp_err_t friend_wifi_init(void)
 
     sta_netif = esp_netif_create_default_wifi_sta();
     esp_netif_create_default_wifi_ap();
+    esp_sntp_config_t sntp_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    sntp_config.start = false;
+    ESP_ERROR_CHECK(esp_netif_sntp_init(&sntp_config));
 
     wifi_init_config_t wifi_config = WIFI_INIT_CONFIG_DEFAULT();
 
@@ -289,7 +293,7 @@ esp_err_t friend_wifi_start_config_ap(void)
 
     wifi_config_t ap_config = {
         .ap = {
-            .ssid = "Moc-Setup",
+            .ssid = "Hisu-Setup",
             .ssid_len = 0,
             .channel = 1,
             .password = "",
@@ -667,6 +671,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         ESP_LOGI(TAG, "STA got IP: " IPSTR, IP2STR(&event->ip_info.ip));
 
         sta_has_ip = true;
+        esp_err_t sync_ret = esp_netif_sntp_start();
+        if (sync_ret != ESP_OK)
+            ESP_LOGW(TAG, "SNTP start failed: %s", esp_err_to_name(sync_ret));
         xEventGroupClearBits(wifi_event_group, WIFI_DISCONNECTED_BIT);
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
 
@@ -720,7 +727,7 @@ static esp_err_t wifi_enter_manual_mode(void)
     }
 
     ESP_LOGI(TAG, "Manual Wi-Fi setup ready");
-    ESP_LOGI(TAG, "Connect to Moc-Setup and open http://192.168.4.1");
+    ESP_LOGI(TAG, "Connect to Hisu-Setup and open http://192.168.4.1");
 
     return ESP_OK;
 }

@@ -7,11 +7,13 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "cJSON.h"
 
 #include "friend_wifi.h"
 #include "friend_wifi_store.h"
 #include "ui/friend_media.h"
 #include "ui/friend_media_store.h"
+#include "ai/friend_ai.h"
 
 static const char *TAG = "HTTP";
 
@@ -43,6 +45,12 @@ static esp_err_t gif_resize_js_handler(httpd_req_t *req);
 static esp_err_t status_handler(httpd_req_t *req);
 static esp_err_t media_upload_handler(httpd_req_t *req);
 static esp_err_t media_face_handler(httpd_req_t *req);
+static esp_err_t ai_key_handler(httpd_req_t *req);
+static esp_err_t ai_ask_handler(httpd_req_t *req);
+static esp_err_t ai_status_handler(httpd_req_t *req);
+static esp_err_t ai_provider_handler(httpd_req_t *req);
+static esp_err_t ai_profile_get_handler(httpd_req_t *req);
+static esp_err_t ai_profile_save_handler(httpd_req_t *req);
 
 static int hex_value(char c)
 {
@@ -236,6 +244,202 @@ static esp_err_t status_handler(httpd_req_t *req)
         online ? "true" : "false", ip, friend_media_current(), friend_media_gif_available() ? "true" : "false");
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, response);
+}
+
+static esp_err_t ai_status_handler(httpd_req_t *req)
+{
+    static const char *names[] = { "idle", "working", "ready", "showing", "done", "error" };
+    friend_ai_state_t state = friend_ai_state();
+    if (state < FRIEND_AI_IDLE || state > FRIEND_AI_ERROR) state = FRIEND_AI_ERROR;
+    char response[208];
+    snprintf(response, sizeof(response),
+        "{\"provider\":\"%s\",\"configured\":%s,\"state\":\"%s\",\"error\":\"%s\"}",
+        friend_ai_provider_name(), friend_ai_has_key() ? "true" : "false", names[state],
+        state == FRIEND_AI_ERROR ? friend_ai_error() : "");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_sendstr(req, response);
+}
+
+static esp_err_t ai_provider_handler(httpd_req_t *req)
+{
+    if (friend_wifi_get_state() != FRIEND_WIFI_STATE_ONLINE)
+    {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "Home is not online");
+    }
+    char name[8];
+    if (read_form(req, name, sizeof(name)) != ESP_OK ||
+        (strcmp(name, "gemini") != 0 && strcmp(name, "openai") != 0))
+    {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_sendstr(req, "Invalid AI provider");
+    }
+    esp_err_t err = friend_ai_set_provider(strcmp(name, "openai") == 0 ?
+        FRIEND_AI_OPENAI : FRIEND_AI_GEMINI);
+    if (err != ESP_OK)
+    {
+        httpd_resp_set_status(req, err == ESP_ERR_INVALID_STATE ? "409 Conflict" : "500 Internal Server Error");
+        return httpd_resp_sendstr(req, err == ESP_ERR_INVALID_STATE ? "AI busy" : "Could not save provider");
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_sendstr(req, "{\"saved\":true}");
+}
+
+static esp_err_t ai_profile_get_handler(httpd_req_t *req)
+{
+    friend_ai_profile_t profile;
+    friend_ai_get_profile(&profile);
+    cJSON *body = cJSON_CreateObject();
+    if (body == NULL || cJSON_AddStringToObject(body, "name", profile.name) == NULL ||
+        cJSON_AddStringToObject(body, "personality", profile.personality) == NULL)
+    {
+        cJSON_Delete(body);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Could not read profile");
+        return ESP_FAIL;
+    }
+    char *response = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (response == NULL)
+    {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Could not read profile");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_sendstr(req, response);
+    cJSON_free(response);
+    return err;
+}
+
+static esp_err_t ai_profile_save_handler(httpd_req_t *req)
+{
+    if (friend_wifi_get_state() != FRIEND_WIFI_STATE_ONLINE)
+    {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "Home is not online");
+    }
+    char body[2048];
+    if (read_form(req, body, sizeof(body)) != ESP_OK ||
+        strlen(body) != (size_t)req->content_len)
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid AI profile");
+        return ESP_FAIL;
+    }
+    cJSON *root = cJSON_ParseWithLength(body, req->content_len);
+    cJSON *name = cJSON_GetObjectItemCaseSensitive(root, "name");
+    cJSON *personality = cJSON_GetObjectItemCaseSensitive(root, "personality");
+    if (!cJSON_IsString(name) || !cJSON_IsString(personality))
+    {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid AI profile");
+        return ESP_FAIL;
+    }
+    friend_ai_profile_t profile = {0};
+    size_t name_length = strlen(name->valuestring);
+    size_t personality_length = strlen(personality->valuestring);
+    if (name_length > FRIEND_AI_NAME_MAX || personality_length > FRIEND_AI_PERSONALITY_MAX)
+    {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "AI profile too long");
+        return ESP_FAIL;
+    }
+    memcpy(profile.name, name->valuestring, name_length + 1);
+    memcpy(profile.personality, personality->valuestring, personality_length + 1);
+    cJSON_Delete(root);
+    esp_err_t err = friend_ai_save_profile(&profile);
+    if (err != ESP_OK)
+    {
+        httpd_resp_set_status(req, err == ESP_ERR_INVALID_STATE ? "409 Conflict" :
+            err == ESP_ERR_INVALID_ARG ? "400 Bad Request" : "500 Internal Server Error");
+        return httpd_resp_sendstr(req, err == ESP_ERR_INVALID_STATE ? "AI busy" :
+            err == ESP_ERR_INVALID_ARG ? "Invalid AI profile" : "Could not save AI profile");
+    }
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"saved\":true}");
+}
+
+static esp_err_t ai_key_handler(httpd_req_t *req)
+{
+    if (friend_wifi_get_state() != FRIEND_WIFI_STATE_ONLINE)
+    {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "Home is not online");
+    }
+    char key[FRIEND_AI_KEY_MAX + 2] = {0};
+    esp_err_t err = req->content_len == 0 ? ESP_OK : read_form(req, key, sizeof(key));
+    if (err == ESP_OK && strlen(key) != (size_t)req->content_len) err = ESP_ERR_INVALID_ARG;
+    if (err == ESP_OK) err = friend_ai_save_key(key);
+    memset(key, 0, sizeof(key));
+    if (err != ESP_OK)
+    {
+        httpd_resp_set_status(req, err == ESP_ERR_INVALID_STATE ? "409 Conflict" : "400 Bad Request");
+        return httpd_resp_sendstr(req, err == ESP_ERR_INVALID_STATE ? "AI busy" : "Invalid API key");
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_sendstr(req, "{\"saved\":true}");
+}
+
+static esp_err_t ai_ask_handler(httpd_req_t *req)
+{
+    if (friend_wifi_get_state() != FRIEND_WIFI_STATE_ONLINE)
+    {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "Home is not online");
+    }
+    if (strcmp(friend_media_current(), "face") != 0)
+    {
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_sendstr(req, "AI works only in face mode");
+    }
+    char question[FRIEND_AI_QUESTION_MAX + 1];
+    if (read_form(req, question, sizeof(question)) != ESP_OK)
+    {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_sendstr(req, "Invalid question");
+    }
+    if (strlen(question) != (size_t)req->content_len)
+    {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_sendstr(req, "Invalid question");
+    }
+    if (httpd_req_get_url_query_len(req) != 0)
+    {
+        memset(question, 0, sizeof(question));
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_sendstr(req, "Unsupported AI option");
+    }
+    esp_err_t err = friend_ai_submit(question);
+    memset(question, 0, sizeof(question));
+    if (err != ESP_OK)
+    {
+        httpd_resp_set_status(req, err == ESP_ERR_NOT_FOUND ? "428 Precondition Required" :
+            err == ESP_ERR_INVALID_STATE ? "409 Conflict" : "400 Bad Request");
+        return httpd_resp_sendstr(req, err == ESP_ERR_NOT_FOUND ? "Set API key first" :
+            err == ESP_ERR_INVALID_STATE ? "AI busy or not in face mode" : "Invalid question");
+    }
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"queued\":true}");
+}
+
+static esp_err_t ai_subtitle_test_handler(httpd_req_t *req)
+{
+    if (friend_wifi_get_state() != FRIEND_WIFI_STATE_ONLINE)
+    {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "Home is not online");
+    }
+    esp_err_t err = friend_ai_test_subtitle();
+    if (err != ESP_OK)
+    {
+        httpd_resp_set_status(req, err == ESP_ERR_INVALID_STATE ? "409 Conflict" : "500 Internal Server Error");
+        return httpd_resp_sendstr(req, err == ESP_ERR_INVALID_STATE ?
+            "AI busy or not in face mode" : "Could not show subtitle");
+    }
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"queued\":true}");
 }
 
 static esp_err_t media_upload_handler(httpd_req_t *req)
@@ -569,7 +773,7 @@ esp_err_t friend_http_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
-    config.max_uri_handlers = 13;
+    config.max_uri_handlers = 20;
 
     ESP_LOGI(TAG, "Starting HTTP server with stack=%u", config.stack_size);
 
@@ -642,6 +846,27 @@ esp_err_t friend_http_start(void)
     const httpd_uri_t face_uri = {
         .uri = "/api/media/face", .method = HTTP_POST, .handler = media_face_handler,
     };
+    const httpd_uri_t ai_status_uri = {
+        .uri = "/api/ai/status", .method = HTTP_GET, .handler = ai_status_handler,
+    };
+    const httpd_uri_t ai_key_uri = {
+        .uri = "/api/ai/key", .method = HTTP_POST, .handler = ai_key_handler,
+    };
+    const httpd_uri_t ai_ask_uri = {
+        .uri = "/api/ai/ask", .method = HTTP_POST, .handler = ai_ask_handler,
+    };
+    const httpd_uri_t ai_provider_uri = {
+        .uri = "/api/ai/provider", .method = HTTP_POST, .handler = ai_provider_handler,
+    };
+    const httpd_uri_t ai_subtitle_test_uri = {
+        .uri = "/api/ai/subtitle-test", .method = HTTP_POST, .handler = ai_subtitle_test_handler,
+    };
+    const httpd_uri_t ai_profile_get_uri = {
+        .uri = "/api/ai/profile", .method = HTTP_GET, .handler = ai_profile_get_handler,
+    };
+    const httpd_uri_t ai_profile_save_uri = {
+        .uri = "/api/ai/profile", .method = HTTP_POST, .handler = ai_profile_save_handler,
+    };
 
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &root_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &style_css_uri));
@@ -655,6 +880,13 @@ esp_err_t friend_http_start(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &still_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &gif_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &face_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ai_status_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ai_key_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ai_ask_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ai_provider_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ai_subtitle_test_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ai_profile_get_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ai_profile_save_uri));
 
     ESP_LOGI(TAG, "HTTP server ready");
     ESP_LOGI(TAG, "Home on STA IP; setup at http://192.168.4.1 while AP is active");

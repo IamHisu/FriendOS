@@ -1,6 +1,7 @@
 #include "friend_media.h"
 #include "friend_gif.h"
 #include "friend_media_store.h"
+#include "ai/friend_ai.h"
 
 #include <stdlib.h>
 
@@ -229,6 +230,7 @@ void friend_media_process(void)
     lv_obj_remove_flag(media_object, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(media_backdrop, LV_OBJ_FLAG_HIDDEN);
     current_kind = command.kind;
+    friend_ai_cancel();
     if (toggle)
     {
         esp_err_t err = friend_media_store_set_image_visible(true);

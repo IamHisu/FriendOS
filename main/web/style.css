@@ -245,6 +245,47 @@ h1 { margin: 0 0 6px; text-align: center; font-size: 28px; }
 .home #uploadStatus.error { color: var(--danger); }
 .home #uploadStatus.ok { color: var(--ok); }
 
+.home .chat-section {
+    display: block;
+    margin-top: 16px;
+}
+.home .chat-section h2 { margin-bottom: 8px; }
+.home .provider-switch { display: flex; width: fit-content; max-width: 100%; gap: 0; margin: 0 0 14px; padding: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.home .provider-switch legend { padding: 0 4px; font-size: 13px; color: var(--muted); }
+.home .provider-switch label { position: relative; cursor: pointer; }
+.home .provider-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.home .provider-switch span { display: block; min-width: 95px; padding: 8px 14px; text-align: center; color: var(--ink); }
+.home .provider-switch label + label span { border-left: 1px solid var(--line); }
+.home .provider-switch input:checked + span { background: var(--moss); color: var(--on-moss); }
+.home .provider-switch input:focus-visible + span { outline: 3px solid var(--sap); outline-offset: -3px; }
+.home .provider-switch input:disabled + span { opacity: .5; cursor: wait; }
+.home .chat-section p { margin: 0 0 12px; }
+.home .chat-section form label { display: block; margin-bottom: 6px; font-weight: 600; }
+.home .chat-row { display: flex; align-items: stretch; gap: 8px; }
+.home .chat-row textarea, .home .chat-row input {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+}
+.home .chat-row button { border-radius: 8px; }
+.home .chat-section details { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+.home .chat-section summary { cursor: pointer; font-weight: 600; }
+.home #keyForm { margin-top: 12px; }
+.home .profile-form { display: grid; gap: 8px; margin-top: 12px; }
+.home .profile-form input, .home .profile-form textarea {
+    width: 100%; min-width: 0; box-sizing: border-box; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--surface); color: var(--ink); font: inherit;
+}
+.home .profile-form button { justify-self: start; }
+.home #keyStatus { margin-top: 8px; }
+.home #aiState { color: var(--muted); }
+
 @media (max-width: 640px) {
     body { padding: 16px 12px 32px; }
     .home section { grid-template-columns: 1fr; padding: 18px; gap: 18px; }

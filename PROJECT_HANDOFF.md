@@ -1,6 +1,6 @@
 # FriendOS --- Project Handoff & Development Guide
 
-> Last updated: 2026-10-01\
+> Last updated: 2026-10-02\
 > Status: Display/UI + Buttons + Microphone + Wi-Fi manager/manual provisioning validated; next: complete Manual Wi-Fi saved-network UX\
 > Platform: ESP32-S3 / ESP-IDF 5.5.5
 
@@ -24,7 +24,7 @@ Thiết bị đầu tiên đang phát triển:
 -   **Board:** ZHENGCHEN_1_54TFT_WIFI
 -   **MCU:** ESP32-S3
 -   **Display:** 240×240
--   **Friend name trong quá trình phát triển:** **Mộc**
+-   **Friend name hiện tại:** **Hisu**
 
 Mục tiêu không phải chỉ tạo một chatbot ESP32. Mục tiêu dài hạn là xây
 dựng một kiến trúc có thể chạy trên nhiều loại ESP32 và cho phép nhiều
@@ -56,11 +56,11 @@ Speaker       Face       Other Friends
 
 Ví dụ:
 
-> User: "Mộc, xem phòng bên kia có ai không."
+> User: "Hisu, xem phòng bên kia có ai không."
 
-Mộc không có camera nhưng phát hiện một Vision Friend có capability
-`camera.capture`. Mộc gửi RPC qua FriendLink, Vision Friend chụp ảnh, AI
-vision phân tích, Mộc trả lời bằng speaker và LCD đồng thời thay đổi
+Hisu không có camera nhưng phát hiện một Vision Friend có capability
+`camera.capture`. Hisu gửi RPC qua FriendLink, Vision Friend chụp ảnh, AI
+vision phân tích, Hisu trả lời bằng speaker và LCD đồng thời thay đổi
 biểu cảm.
 
 ------------------------------------------------------------------------
@@ -113,7 +113,7 @@ Một board vật lý, ví dụ:
 Một thực thể logic. Một Friend có thể gồm một hoặc nhiều Node.
 
 ``` text
-Mộc
+Hisu
  ├── Voice Node
  │     └── Zhengchen
  ├── Vision Node
@@ -623,7 +623,7 @@ LVGL double buffer       PASS
 LVGL RGB565 byte swap    PASS
 ESP-LCD DMA callback     PASS
 ESP Timer / LVGL tick    PASS
-Mộc Face UI              PASS
+Hisu Face UI              PASS
 Natural blink            PASS
 Emotion UI               PASS
 
@@ -664,7 +664,7 @@ Current responsibility split:
 
 -   `board_config.h`: board-specific pins/config.
 -   `board_display.c`: SPI/ST7789/backlight/LVGL display bridge.
--   `friend_ui.c`: Mộc face/emotion/blink UI.
+-   `friend_ui.c`: Hisu face/emotion/blink UI.
 -   `main.c`: orchestration and temporary bring-up tests.
 
 Recommended direction:
@@ -680,7 +680,7 @@ FriendOS/
 │   │   └── personality
 │   ├── friend_display/
 │   │   ├── display_driver
-│   │   ├── moc_face
+│   │   ├── hisu_face
 │   │   └── emotion_renderer
 │   ├── friend_audio/
 │   │   ├── microphone
@@ -721,7 +721,7 @@ board definition.
 
 ## 16. Immediate Next Task --- Buttons
 
-**CURRENT STOPPING POINT: Display, LVGL và Mộc Face UI đã hoạt động ổn
+**CURRENT STOPPING POINT: Display, LVGL và Hisu Face UI đã hoạt động ổn
 định.**
 
 **NEXT TASK: Validate 3 physical buttons.**
@@ -749,9 +749,9 @@ Không nối button trực tiếp vào logic AI ở bước bring-up này.
 
 ------------------------------------------------------------------------
 
-## 17. Mộc Face UI --- Current Validated State
+## 17. Hisu Face UI --- Current Validated State
 
-Mộc Face UI đã được tích hợp bằng LVGL và chạy ổn định trên màn 240×240.
+Hisu Face UI đã được tích hợp bằng LVGL và chạy ổn định trên màn 240×240.
 
 UI vẫn độc lập với OpenAI/Xiaozhi. Application gọi API abstraction:
 
@@ -858,7 +858,7 @@ Stage 3:
 LLM response → TTS → speaker
 
 Stage 4:
-Emotion/state → MocFace
+Emotion/state → HisuFace
 ```
 
 Final:
@@ -906,21 +906,21 @@ Chỉ sau khi flow này chạy mới xem xét large image/audio transfer.
 Roles:
 
 ``` text
-Zhengchen       Mộc / Voice Friend
+Zhengchen       Hisu / Voice Friend
 XIAO S3 Sense   Vision Node
 CYD             Network Dashboard
 ```
 
 Scenario:
 
-1.  Mộc discovers XIAO.
+1.  Hisu discovers XIAO.
 2.  XIAO advertises `camera.capture`.
-3.  User asks Mộc to look somewhere.
-4.  Mộc invokes `camera.capture`.
+3.  User asks Hisu to look somewhere.
+4.  Hisu invokes `camera.capture`.
 5.  XIAO captures image.
 6.  AI analyzes image.
-7.  Mộc speaks answer.
-8.  Mộc displays appropriate emotion.
+7.  Hisu speaks answer.
+8.  Hisu displays appropriate emotion.
 9.  CYD shows both nodes and their state.
 
 Demo này chứng minh kiến trúc chính của FriendOS.
@@ -1010,7 +1010,7 @@ gặp reboot loop.
 ## 26. Definition of Success --- FriendOS v1
 
 ``` text
-[ ] Mộc boots reliably
+[ ] Hisu boots reliably
 [ ] Animated face/UI
 [ ] Microphone capture
 [ ] Speaker playback
@@ -1058,7 +1058,7 @@ BL   20
 
 LCD color + geometry tests đã PASS trên phần cứng thật.
 
-LVGL 9 integration cũng đã PASS. Mộc Face UI đã chạy ổn định với natural
+LVGL 9 integration cũng đã PASS. Hisu Face UI đã chạy ổn định với natural
 blink và emotion switching. Display bridge hiện dùng partial double
 buffer, RGB565 byte swap và ESP-LCD DMA completion callback trước khi
 báo `lv_display_flush_ready()`.
@@ -1163,7 +1163,7 @@ Responsibilities:
 - `board_display.c`: SPI/ST7789/backlight/LVGL display bridge.
 - `board_buttons.c`: physical buttons via `espressif/button`.
 - `board_audio.c`: microphone bring-up.
-- `friend_ui.c`: Mộc face/emotion/action UI.
+- `friend_ui.c`: Hisu face/emotion/action UI.
 - `friend_wifi.c`: Wi-Fi driver + Wi-Fi manager/state machine.
 - `friend_wifi_store.c`: FriendOS-owned persistent multi-network credentials in NVS.
 - `friend_http.c`: Manual Setup HTTP server/API.
@@ -1254,7 +1254,7 @@ FRIEND_WIFI_STATE_MANUAL
  ↓
 Wi-Fi APSTA
  ↓
-SoftAP: Moc-Setup
+SoftAP: Hisu-Setup
  ↓
 AP IP: 192.168.4.1
  ↓
@@ -1271,7 +1271,7 @@ Validated:
 BOOT long press 5 s              PASS
 Enter MANUAL state               PASS
 STA -> APSTA                      PASS
-Moc-Setup SoftAP                 PASS
+Hisu-Setup SoftAP                 PASS
 DHCP 192.168.4.1                 PASS
 Phone joins AP                   PASS
 HTTP provisioning                PASS
@@ -1379,7 +1379,7 @@ Before implementing a new subsystem/hardware feature:
 1. Check official **ESP-IoT-Solution** documentation first.
 2. If it does not cover the required detail, use official **ESP-IDF / Espressif** documentation/source.
 3. Prefer established Espressif/expert solutions for generic subsystem problems before inventing a custom implementation.
-4. Custom-design only the policy/behavior specific to FriendOS/Mộc.
+4. Custom-design only the policy/behavior specific to FriendOS/Hisu.
 5. Develop incrementally: one change -> test -> checkpoint -> continue.
 
 Code style currently expected:
@@ -1427,9 +1427,43 @@ After this passes, make a checkpoint before moving to the next FriendOS subsyste
 
 ## 28. Persistent display media (2026-10-02)
 
-The last uploaded RGB565 still image or GIF is kept in the media partition; whether the display currently shows that media or the Moc face is kept separately in NVS (`friend_media/show_image`). A short BOOT click switches between them without rewriting the image. If no saved image exists, a brief notice appears on the TFT. The 5-second BOOT hold still enters Manual Wi-Fi Setup. GIF playback never writes flash. The media store uses two alternating slots with payload and header checksums, so an interrupted media write can fall back to the older valid image. On boot, unavailable saved media falls back to the Moc face.
+The last uploaded RGB565 still image or GIF is kept in the media partition; whether the display currently shows that media or the Hisu face is kept separately in NVS (`friend_media/show_image`). A short BOOT click switches between them without rewriting the image. If no saved image exists, a brief notice appears on the TFT. The 5-second BOOT hold still enters Manual Wi-Fi Setup. GIF playback never writes flash. The media store uses two alternating slots with payload and header checksums, so an interrupted media write can fall back to the older valid image. On boot, unavailable saved media falls back to the Hisu face.
 
 `partitions.csv` preserves the prior NVS and two OTA offsets/sizes and adds a 0x220000-byte `media` data partition at 0x380000 on the 16 MB flash. The first installation of this feature must flash the partition table as well as the app (`idf.py flash`), not only `FriendOS.bin` or an OTA app update. Existing Wi-Fi credentials remain in the unchanged NVS partition. The old note in section 16 about *not* changing the partition table applied to the earlier Wi-Fi work and is now superseded.
 
 Source: `main/ui/friend_media_store.c`; boot restore: `main/main.c`; button/UI switching: `main/board/board_buttons.c` and `main/ui/friend_media.c`; web save/selection: `main/network/friend_http.c`. Hardware button and power-cycle validation is still needed.
+
+## 29. Text AI on Home (2026-10-02)
+
+Home now accepts a text question and sends it to OpenAI Responses API using `gpt-4.1-mini`. The reply is shown gradually in a bottom subtitle band on the TFT; there is no STT, TTS, speaker output, conversation history, or tool calling yet. The AI worker owns HTTPS/JSON and never calls LVGL. The UI task consumes its result, and media changes cancel the subtitle and invalidate pending replies. Questions are accepted only while the face is showing. SNTP starts when STA gets an IP so TLS can validate certificates.
+
+The Home page can save/clear an OpenAI API key in NVS (`friend_ai/api_key`), but does not return or embed the key in page source/status. This direct-device prototype uses local HTTP and unencrypted NVS: provision the key only on trusted Wi-Fi. A future hardened deployment needs authenticated HTTPS provisioning and encrypted secret storage, or a trusted proxy. The user must supply their own key; it is not included in firmware.
+
+Sources: `main/ai/friend_ai.c`, `main/ui/friend_subtitle.c`, `main/network/friend_http.c`, `main/web/home.js`. The generated Vietnamese font uses the bundled DejaVu Sans source from LVGL; its license is at `managed_components/lvgl__lvgl/scripts/built_in_font/font_license/DejaVuSans/LICENSE`.
+
+Verification: ESP-IDF firmware build and Home/GIF browser tests pass. Live API response, subtitle timing/readability, Wi-Fi/NTP conditions, and power-cycle behavior still need testing on Hisu hardware. Do not mark voice or on-device AI as complete.
+
+OpenAI HTTP 429 is not a single condition. The AI worker now classifies `error.code`/`error.type` into temporary rate limit, credit/usage limit, organization spend limit, and project spend limit, and shows a specific short message on TFT and Home. Billing/quota errors must not be retried automatically; account/project billing and limits require owner action. The live error category still needs verification with the user's API account after flashing the updated firmware.
+
+## 30. Gemini text provider (2026-10-02)
+
+Home now selects Gemini or OpenAI. Gemini is the default when no provider was saved; selection persists in NVS (`friend_ai/provider`). Keys are separate (`friend_ai/gemini_key` and the existing `friend_ai/api_key`), never returned by status. Gemini calls the official `v1beta/models/gemini-3.5-flash-lite:generateContent` REST endpoint with `x-goog-api-key`; the shared worker/subtitle pipeline and face-only rule remain unchanged. Provider changes are rejected while a request is running and invalidate old subtitle results.
+
+To test: flash the newly built app, open Home on Hisu's STA IP, select Gemini, save a Gemini API key from Google AI Studio, ensure the face is showing, and send a short Vietnamese question. Do not paste the key into logs or chat. Browser tests and firmware build validate integration structure, but a live Gemini response and TFT playback still need hardware validation. Local Home HTTP and unencrypted NVS remain prototype-only key storage.
+
+Subtitle delivery diagnostic: the network worker reports `ready` after allocating reply text and before queueing it; queue failure reports `error`. The UI task reports `showing` only after creating the LVGL panel/timer, then `done` after the subtitle finishes. Logs report reply byte counts and UI delivery without logging private reply text or API keys. Home's **Thu phu de tren Hisu** button sends fixed text through the same UI queue without an API call or key; it is enabled only in face mode. After flashing, press it and watch the TFT. If no dark band appears, collect `AI` and `SUBTITLE` serial lines and inspect UI/display rendering. If the test works but Gemini does not, inspect worker result delivery. Live TFT behavior has not yet been verified.
+
+Subtitle font fix: `main/ui/font_vietnamese_16.c` has `bitmap_format = 1` (`LV_FONT_FMT_TXT_COMPRESSED`). The tracked `sdkconfig` previously disabled `CONFIG_LV_USE_FONT_COMPRESSED`, causing LVGL to return no glyph bitmap even though the panel was created. The user observed a slightly dim mouth but no letters during the subtitle self-test. `CONFIG_LV_USE_FONT_COMPRESSED=y` now enables the required decoder. The user subsequently confirmed that the subtitle self-test and live AI replies both display on the TFT.
+
+## 31. Editable AI name and personality (2026-10-02)
+
+Home now has **Tên và tính cách** fields. `GET/POST /api/ai/profile` reads/writes `friend_ai/name` and `friend_ai/personality` in NVS; a new request uses the current values in the shared Gemini/OpenAI system instruction. The default name is Hisu. The current default style is playful, childlike and friendly, usually avoiding pronouns and using mình–bạn when needed. The fixed instruction requires Vietnamese plain text, normally no more than three short sentences, but permits up to eight short story sentences or ten short poem lines with line breaks. No Markdown or false audio claims. OpenAI/Gemini output budgets are 512/640 tokens; extracted subtitle text is capped at 2048 bytes. Profile saving is rejected while an AI request is working or queued. Inputs have byte-length limits, and the Home page checks UTF-8 byte length before posting. The key and profile are separate; changing the profile does not touch API keys. Browser tests and firmware build cover integration; live persistence, behavior after reboot, and model adherence need device testing.
+
+## 32. Hisu device identity (2026-10-02)
+
+Hisu is the user-facing device/AI name throughout the firmware, Home, Wi-Fi Setup, logs, tests, and this handoff. FriendOS remains the framework/build name and `friend_*` remains the internal module prefix. The configuration SoftAP SSID is now `Hisu-Setup`; reconnect to that SSID the next time manual Setup is opened. A saved AI profile with the legacy default name is migrated to Hisu on boot, while other custom profile names are kept. Existing API keys, Wi-Fi credentials, and saved media are not reset. After flashing, verify Home/Setup labels, AI identity, and the updated SSID on hardware.
+
+## 33. Web search deferred (2026-10-02)
+
+The user's Gemini Free Tier project cannot access Gemini 2.5 Flash-Lite. Google's model guide limits access to Gemini 2.5 to projects that used it previously; the Free Tier does not provide Search grounding on Gemini 3.x. The user chose to keep Gemini text chat without web search and declined a separate Tavily key. The earlier Google Search grounding experiment was removed from firmware, Home, and tests. Normal Gemini chat continues to use `gemini-3.5-flash-lite` and TFT subtitles. The system instruction tells the model to state that it cannot verify live weather, prices, stocks, fuel prices, or lottery results, and not to invent numbers. This is a prompt guard, not a deterministic guarantee; do not present such answers as live data. References: https://ai.google.dev/gemini-api/docs/models and https://ai.google.dev/gemini-api/docs/pricing .
 

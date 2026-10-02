@@ -8,6 +8,9 @@ idf_component_register(
         "ui/friend_media.c"
         "ui/friend_media_store.c"
         "ui/friend_gif.c"
+        "ui/friend_subtitle.c"
+        "ui/font_vietnamese_16.c"
+        "ai/friend_ai.c"
         "network/friend_wifi.c"
         "network/friend_http.c"
         "network/friend_wifi_store.c"
@@ -23,6 +26,9 @@ idf_component_register(
         esp_lcd
         esp_timer
         esp_partition
+        esp_http_client
+        json
+        mbedtls
     EMBED_TXTFILES
         "web/index.html"
         "web/style.css"

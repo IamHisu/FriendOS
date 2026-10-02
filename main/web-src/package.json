@@ -2,7 +2,7 @@
   "private": true,
   "scripts": {
     "build": "esbuild gif-resize.js --bundle --minify --format=iife --global-name=FriendGifResize --legal-comments=inline --outfile=../web/gif-resize.js",
-    "test": "node test-gif-resize.mjs"
+    "test": "node test-gif-resize.mjs && node test-home-ai.mjs"
   },
   "dependencies": {
     "gifenc": "1.0.3",

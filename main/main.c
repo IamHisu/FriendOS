@@ -16,6 +16,7 @@
 #include "ui/friend_ui.h"
 #include "ui/friend_media.h"
 #include "ui/friend_media_store.h"
+#include "ai/friend_ai.h"
 #include "network/friend_wifi.h"
 #include "network/friend_wifi_store.h"
 
@@ -42,6 +43,7 @@ static void friend_ui_task(void *arg)
     while (1)
     {
         friend_media_process();
+        friend_ai_process_ui();
         int64_t handler_started_us = esp_timer_get_time();
         lv_timer_handler();
         uint32_t handler_elapsed_us = (uint32_t)(esp_timer_get_time() - handler_started_us);
@@ -101,6 +103,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(friend_wifi_init());
     ESP_ERROR_CHECK(friend_wifi_store_init());
+    ESP_ERROR_CHECK(friend_ai_init());
     friend_media_kind_t saved_kind = FRIEND_MEDIA_FACE;
     uint8_t *saved_data = NULL;
     size_t saved_size = 0;
@@ -143,6 +146,6 @@ void app_main(void)
         return;
     }
 
-    ESP_LOGI(TAG, "Moc is awake!");
+    ESP_LOGI(TAG, "Hisu is awake!");
     ESP_LOGI(TAG, "FriendOS initialization complete");
 }

@@ -84,7 +84,7 @@ async function connectWifi(ssid, password) {
 
         if (result.success) {
             status.style.display = "none";
-            document.getElementById("subtitle").textContent = "Mộc đã kết nối Wi-Fi";
+            document.getElementById("subtitle").textContent = "Hisu đã kết nối Wi-Fi";
             document.getElementById("passwordPanel").classList.add("hidden");
             document.getElementById("networks").classList.add("hidden");
             document.getElementById("refreshButton").classList.add("hidden");

@@ -848,7 +848,7 @@ void friend_ui_set_emotion(friend_emotion_t emotion)
 
 esp_err_t friend_ui_init(void)
 {
-    ESP_LOGI(TAG, "Initializing Moc UI");
+    ESP_LOGI(TAG, "Initializing Hisu UI");
 
     lv_obj_t *screen = lv_screen_active();
 
@@ -968,7 +968,7 @@ esp_err_t friend_ui_init(void)
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Moc face created - blink, gaze and idle actions enabled");
+    ESP_LOGI(TAG, "Hisu face created - blink, gaze and idle actions enabled");
 
     friend_ui_set_emotion(FRIEND_EMOTION_NEUTRAL);
 
